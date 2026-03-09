@@ -199,7 +199,9 @@ async def download_files(
 
     store.update_download_status(submission_id, DownloadStatus.IN_PROGRESS)
 
-    result = await download_submission_files(sub.payload, settings.repo_path)
+    result = await download_submission_files(
+        sub.payload, settings.repo_path, settings.GNOME_GOA_ACCOUNT_PATH
+    )
 
     if result.success:
         store.update_download_status(
