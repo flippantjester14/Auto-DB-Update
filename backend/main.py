@@ -212,9 +212,13 @@ async def download_files(
             },
         )
     else:
-        store.update_download_status(submission_id, DownloadStatus.FAILED)
+        store.update_download_status(
+            submission_id, 
+            DownloadStatus.FAILED, 
+            error_detail=result.error
+        )
 
-    return result
+    return store.get_submission(submission_id)
 
 
 # ── 4. WAYPOINT DATA ────────────────────────────────────────────────────────
