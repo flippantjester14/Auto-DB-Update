@@ -42,9 +42,25 @@ class SubmissionStore:
                 download_status TEXT NOT NULL DEFAULT 'not_started',
                 error_detail TEXT,
                 downloaded_files TEXT,
+                files_downloaded INTEGER NOT NULL DEFAULT 0,
+                waypoint_verified INTEGER NOT NULL DEFAULT 0,
+                id_resolution_reviewed INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )
         """)
+        # Migration: Add columns if they don't exist
+        try:
+            conn.execute("ALTER TABLE submissions ADD COLUMN files_downloaded INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE submissions ADD COLUMN waypoint_verified INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE submissions ADD COLUMN id_resolution_reviewed INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         conn.close()
 
@@ -57,13 +73,16 @@ class SubmissionStore:
         now = datetime.now(timezone.utc).isoformat()
         conn = self._get_conn()
         conn.execute(
-            """INSERT INTO submissions (id, payload, status, download_status, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
+            """INSERT INTO submissions (id, payload, status, download_status, files_downloaded, waypoint_verified, id_resolution_reviewed, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 submission_id,
                 payload.model_dump_json(),
                 status.value,
                 DownloadStatus.NOT_STARTED.value,
+                0,
+                0,
+                0,
                 now,
             ),
         )
@@ -120,19 +139,54 @@ class SubmissionStore:
     ) -> bool:
         conn = self._get_conn()
         files_json = json.dumps(downloaded_files) if downloaded_files else None
+        
+        # Determine if we should set files_downloaded to true
+        is_completed = 1 if download_status == DownloadStatus.COMPLETED else 0
+        
         if error_detail:
             conn.execute(
-                "UPDATE submissions SET download_status = ?, downloaded_files = ?, error_detail = ? WHERE id = ?",
-                (download_status.value, files_json, error_detail, submission_id),
+                "UPDATE submissions SET download_status = ?, downloaded_files = ?, error_detail = ?, files_downloaded = ? WHERE id = ?",
+                (download_status.value, files_json, error_detail, is_completed, submission_id),
             )
         else:
+            # If status is NOT started or in progress, we might want to keep the old flag if it was already True?
+            # But usually it progresses NotStarted -> InProgress -> Completed.
+            # If it's Completed, we definitely set it to 1.
             conn.execute(
-                "UPDATE submissions SET download_status = ?, downloaded_files = ? WHERE id = ?",
-                (download_status.value, files_json, submission_id),
+                "UPDATE submissions SET download_status = ?, downloaded_files = ?, files_downloaded = ? WHERE id = ?",
+                (download_status.value, files_json, is_completed, submission_id),
             )
         conn.commit()
         conn.close()
         return True
+
+    def update_review_state(
+        self,
+        submission_id: str,
+        waypoint_verified: Optional[bool] = None,
+        id_resolution_reviewed: Optional[bool] = None,
+    ) -> bool:
+        conn = self._get_conn()
+        updates = []
+        params = []
+        if waypoint_verified is not None:
+            updates.append("waypoint_verified = ?")
+            params.append(1 if waypoint_verified else 0)
+        if id_resolution_reviewed is not None:
+            updates.append("id_resolution_reviewed = ?")
+            params.append(1 if id_resolution_reviewed else 0)
+
+        if not updates:
+            conn.close()
+            return False
+
+        params.append(submission_id)
+        query = f"UPDATE submissions SET {', '.join(updates)} WHERE id = ?"
+        conn.execute(query, tuple(params))
+        conn.commit()
+        affected = conn.total_changes
+        conn.close()
+        return affected > 0
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -148,4 +202,7 @@ class SubmissionStore:
             error_detail=row["error_detail"],
             created_at=row["created_at"],
             downloaded_files=downloaded_files,
+            files_downloaded=bool(row["files_downloaded"]),
+            waypoint_verified=bool(row["waypoint_verified"]),
+            id_resolution_reviewed=bool(row["id_resolution_reviewed"]),
         )

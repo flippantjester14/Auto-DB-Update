@@ -1,20 +1,26 @@
 import React from 'react';
 import { Routes, Route } from 'react-router-dom';
-import Dashboard from './pages/Dashboard';
-import ReviewPage from './pages/ReviewPage';
+import { AuthProvider } from './context/AuthContext';
+import { ToastProvider } from './components/shared/Toast';
+import AppShell from './components/shell/AppShell';
+import InboxPage from './pages/InboxPage';
+import SubmissionDetail from './components/submissions/SubmissionDetail';
+import StatsPage from './pages/StatsPage';
+import ViewerPage from './pages/ViewerPage';
 
 export default function App() {
     return (
-        <div className="app">
-            <header className="app-header">
-                <h1>🦅 RedWing DB Automation</h1>
-            </header>
-            <main className="app-main">
-                <Routes>
-                    <Route path="/" element={<Dashboard />} />
-                    <Route path="/submissions/:id" element={<ReviewPage />} />
-                </Routes>
-            </main>
-        </div>
+        <AuthProvider>
+            <ToastProvider>
+                <AppShell>
+                    <Routes>
+                        <Route path="/" element={<InboxPage />} />
+                        <Route path="/submissions/:id" element={<SubmissionDetail />} />
+                        <Route path="/stats" element={<StatsPage />} />
+                        <Route path="/viewer" element={<ViewerPage />} />
+                    </Routes>
+                </AppShell>
+            </ToastProvider>
+        </AuthProvider>
     );
 }
