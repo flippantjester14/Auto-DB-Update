@@ -3,15 +3,9 @@ import { Search } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 export default function TopBar() {
-    const { user } = useAuth();
+    const { user, logout } = useAuth();
     const [query, setQuery] = useState('');
-
-    const initials = (user.displayName || user.email)
-        .split(' ')
-        .map(w => w[0])
-        .join('')
-        .toUpperCase()
-        .slice(0, 2);
+    const [showMenu, setShowMenu] = useState(false);
 
     return (
         <header className="topbar">
@@ -33,8 +27,69 @@ export default function TopBar() {
             </div>
 
             <div className="topbar-actions">
-                <div className="topbar-avatar" title={user.email}>
-                    {initials}
+                <div style={{ position: 'relative' }}>
+                    <img
+                        src={user?.photoURL || 'https://www.google.com/favicon.ico'}
+                        referrerPolicy="no-referrer"
+                        style={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: '50%',
+                            cursor: 'pointer',
+                            border: '2px solid #E5E7EB'
+                        }}
+                        onClick={() => setShowMenu(!showMenu)}
+                        title={user?.displayName || user?.email}
+                    />
+                    {showMenu && (
+                        <div style={{
+                            position: 'absolute',
+                            right: 0,
+                            top: '40px',
+                            background: 'white',
+                            border: '1px solid #E5E7EB',
+                            borderRadius: '8px',
+                            padding: '8px',
+                            minWidth: '200px',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+                            zIndex: 100
+                        }}>
+                            <div style={{ padding: '8px 12px', borderBottom: '1px solid #E5E7EB', marginBottom: '4px' }}>
+                                <div style={{ fontSize: '13px', fontWeight: 500, color: '#111827' }}>
+                                    {user?.displayName}
+                                </div>
+                                <div style={{ fontSize: '12px', color: '#6B7280' }}>{user?.email}</div>
+                                <div style={{
+                                    fontSize: '11px',
+                                    fontFamily: 'Barlow Condensed, sans-serif',
+                                    fontWeight: 600,
+                                    color: '#2563EB',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.06em',
+                                    marginTop: '4px'
+                                }}>
+                                    {user?.role}
+                                </div>
+                            </div>
+                            <button
+                                onClick={logout}
+                                style={{
+                                    width: '100%',
+                                    padding: '8px 12px',
+                                    background: 'none',
+                                    border: 'none',
+                                    textAlign: 'left',
+                                    cursor: 'pointer',
+                                    fontSize: '13px',
+                                    color: '#DC2626',
+                                    borderRadius: '4px',
+                                    fontFamily: 'Barlow, sans-serif'
+                                }}
+                            >
+                                Sign out
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </header>
