@@ -14,6 +14,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import Settings, get_settings
+from auth import get_current_user, require_role
 from drive_downloader import download_submission_files
 from excel_updater import ExcelUpdater
 from models import (
@@ -130,7 +131,7 @@ async def webhook_new_submission(
 # ── 2. SUBMISSIONS API ──────────────────────────────────────────────────────
 
 @app.get("/submissions", response_model=list[SubmissionResponse])
-async def list_submissions(store: SubmissionStore = Depends(get_store)):
+async def list_submissions(store: SubmissionStore = Depends(get_store), user: dict = Depends(get_current_user)):
     """List all submissions with their status."""
     return store.list_submissions()
 
@@ -139,7 +140,7 @@ async def list_submissions(store: SubmissionStore = Depends(get_store)):
 async def get_submission(
     submission_id: str,
     store: SubmissionStore = Depends(get_store),
-):
+    user: dict = Depends(get_current_user)):
     """Get full details of one submission."""
     sub = store.get_submission(submission_id)
     if sub is None:
@@ -152,7 +153,7 @@ async def update_review_state(
     submission_id: str,
     request: ReviewStateUpdateRequest,
     store: SubmissionStore = Depends(get_store),
-):
+    user: dict = Depends(require_role('operator'))):
     """Update verification flags for a submission."""
     affected = store.update_review_state(
         submission_id,
@@ -169,7 +170,7 @@ async def update_submission_status(
     submission_id: str,
     body: StatusUpdateRequest,
     store: SubmissionStore = Depends(get_store),
-):
+    user: dict = Depends(require_role('operator'))):
     """Update submission status (e.g., reject)."""
     sub = store.get_submission(submission_id)
     if sub is None:
@@ -191,7 +192,7 @@ async def update_submission_status(
 async def mark_as_duplicate(
     submission_id: str,
     store: SubmissionStore = Depends(get_store),
-):
+    user: dict = Depends(require_role('operator'))):
     """Manually flag a submission as a duplicate."""
     sub = store.get_submission(submission_id)
     if sub is None:
@@ -209,7 +210,7 @@ async def download_files(
     submission_id: str,
     store: SubmissionStore = Depends(get_store),
     settings: Settings = Depends(get_settings),
-):
+    user: dict = Depends(require_role('operator'))):
     """Download waypoints and image files from Google Drive."""
     sub = store.get_submission(submission_id)
     if sub is None:
@@ -251,7 +252,7 @@ async def get_waypoint_data(
     submission_id: str,
     store: SubmissionStore = Depends(get_store),
     settings: Settings = Depends(get_settings),
-):
+    user: dict = Depends(get_current_user)):
     """Parse the downloaded .waypoints file and return structured JSON."""
     sub = store.get_submission(submission_id)
     if sub is None:
@@ -280,7 +281,7 @@ async def resolve_preview(
     submission_id: str,
     store: SubmissionStore = Depends(get_store),
     settings: Settings = Depends(get_settings),
-):
+    user: dict = Depends(get_current_user)):
     """Dry-run of Excel resolution pipeline (Steps 2–8). No writes."""
     sub = store.get_submission(submission_id)
     if sub is None:
@@ -309,7 +310,7 @@ async def approve_submission(
     body: ApprovalRequest,
     store: SubmissionStore = Depends(get_store),
     settings: Settings = Depends(get_settings),
-):
+    user: dict = Depends(require_role('operator'))):
     """Run the full approval pipeline with confirmation gate."""
     sub = store.get_submission(submission_id)
     if sub is None:
@@ -360,7 +361,7 @@ async def approve_submission(
 async def get_stats(
     settings: Settings = Depends(get_settings),
     store: SubmissionStore = Depends(get_store),
-):
+    user: dict = Depends(get_current_user)):
     """Aggregated stats from flights.db and submissions.db."""
     import sqlite3 as _sqlite3
 
@@ -449,7 +450,7 @@ async def get_stats(
 async def get_pipeline_status(
     submission_id: str,
     store: SubmissionStore = Depends(get_store),
-):
+    user: dict = Depends(get_current_user)):
     """Return current pipeline step/status for live UI polling during approval."""
     sub = store.get_submission(submission_id)
     if sub is None:
@@ -466,7 +467,7 @@ async def get_pipeline_status(
 # ── CONFIG ENDPOINT ─────────────────────────────────────────────────────────
 
 @app.get("/config/cesium-token")
-async def get_cesium_token(settings: Settings = Depends(get_settings)):
+async def get_cesium_token(settings: Settings = Depends(get_settings), user: dict = Depends(get_current_user)):
     """Return the Cesium Ion token for the frontend."""
     return {"token": settings.CESIUM_ION_TOKEN}
 

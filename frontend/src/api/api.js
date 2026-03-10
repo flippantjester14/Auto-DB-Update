@@ -8,28 +8,35 @@
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
-/**
- * Authenticated fetch wrapper.
- * Currently passes requests through unchanged.
- * Firebase integration: add `Authorization: Bearer <token>` here.
- */
-async function authFetch(path, options = {}) {
-    const url = `${API_BASE}${path}`;
-    const headers = {
-        'Content-Type': 'application/json',
-        // TODO: add Firebase token header here
-        ...options.headers,
-    };
+import { auth } from '../firebase';
 
-    const res = await fetch(url, { ...options, headers });
-
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+const authFetch = async (url, options = {}) => {
+    let token = null;
+    try {
+        token = await auth.currentUser?.getIdToken(false); // false = use cached token
+    } catch (err) {
+        console.warn('Could not get auth token:', err);
     }
 
-    return res.json();
-}
+    const headers = {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+        ...options.headers,
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
+
+    const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}${url}`, {
+        ...options,
+        headers
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+        throw new Error(errorData.detail || `HTTP ${response.status}`);
+    }
+
+    return response.json();
+};
 
 export const api = {
     // ── Submissions ─────────────────────────────────────────────────────
