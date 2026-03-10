@@ -1,0 +1,65 @@
+import React from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, BarChart3, Map } from 'lucide-react';
+
+const NAV_ITEMS = [
+    {
+        section: 'Submissions',
+        items: [
+            { label: 'All', path: '/', filter: null },
+            { label: 'Pending', path: '/?status=pending', filter: 'pending' },
+            { label: 'Approved', path: '/?status=approved', filter: 'approved' },
+            { label: 'Rejected', path: '/?status=rejected', filter: 'rejected' },
+            { label: 'Failed', path: '/?status=failed', filter: 'failed' },
+        ],
+    },
+    {
+        section: 'Tools',
+        items: [
+            { label: 'DB Stats', path: '/stats', icon: BarChart3 },
+            { label: 'WP Viewer', path: '/viewer', icon: Map },
+        ],
+    },
+];
+
+export default function Sidebar({ pendingCount = 0 }) {
+    const location = useLocation();
+    const navigate = useNavigate();
+
+    const isActive = (item) => {
+        if (item.filter !== undefined) {
+            const params = new URLSearchParams(location.search);
+            const currentFilter = params.get('status');
+            if (item.filter === null && !currentFilter && location.pathname === '/') return true;
+            return currentFilter === item.filter && location.pathname === '/';
+        }
+        return location.pathname === item.path;
+    };
+
+    return (
+        <nav className="sidebar">
+            {NAV_ITEMS.map((group) => (
+                <div key={group.section} className="sidebar-section">
+                    <div className="sidebar-section-title">{group.section}</div>
+                    {group.items.map((item) => (
+                        <a
+                            key={item.label}
+                            className={`sidebar-item ${isActive(item) ? 'active' : ''}`}
+                            onClick={(e) => {
+                                e.preventDefault();
+                                navigate(item.path);
+                            }}
+                            href={item.path}
+                        >
+                            {item.icon && <item.icon size={16} />}
+                            {item.label}
+                            {item.label === 'Pending' && pendingCount > 0 && (
+                                <span className="sidebar-badge">{pendingCount}</span>
+                            )}
+                        </a>
+                    ))}
+                </div>
+            ))}
+        </nav>
+    );
+}

@@ -62,6 +62,9 @@ class SubmissionResponse(BaseModel):
     error_detail: Optional[str] = None
     created_at: str
     downloaded_files: Optional[Dict[str, str]] = None
+    files_downloaded: bool = False
+    waypoint_verified: bool = False
+    id_resolution_reviewed: bool = False
 
 
 # ── Status Update ────────────────────────────────────────────────────────────
@@ -69,6 +72,11 @@ class SubmissionResponse(BaseModel):
 class StatusUpdateRequest(BaseModel):
     status: SubmissionStatus
     reason: Optional[str] = None
+
+
+class ReviewStateUpdateRequest(BaseModel):
+    waypoint_verified: Optional[bool] = None
+    id_resolution_reviewed: Optional[bool] = None
 
 
 # ── Approval Request (with confirmation gate) ───────────────────────────────
@@ -109,7 +117,9 @@ class WaypointData(BaseModel):
     index: int
     current_wp: int
     coord_frame: int
+    coord_frame_name: str
     command: int
+    command_name: str
     param1: float
     param2: float
     param3: float
@@ -118,6 +128,8 @@ class WaypointData(BaseModel):
     longitude: float
     altitude: float
     autocontinue: int
+    is_nav_command: bool
+    is_action_command: bool
 
 
 class WaypointFileResponse(BaseModel):

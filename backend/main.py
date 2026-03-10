@@ -22,6 +22,7 @@ from models import (
     DownloadStatus,
     PipelineResult,
     ResolvePreviewResponse,
+    ReviewStateUpdateRequest,
     StatusUpdateRequest,
     SubmissionPayload,
     SubmissionResponse,
@@ -144,6 +145,23 @@ async def get_submission(
     if sub is None:
         raise HTTPException(status_code=404, detail="Submission not found")
     return sub
+
+
+@app.patch("/submissions/{submission_id}/review-state")
+async def update_review_state(
+    submission_id: str,
+    request: ReviewStateUpdateRequest,
+    store: SubmissionStore = Depends(get_store),
+):
+    """Update verification flags for a submission."""
+    affected = store.update_review_state(
+        submission_id,
+        waypoint_verified=request.waypoint_verified,
+        id_resolution_reviewed=request.id_resolution_reviewed,
+    )
+    if not affected:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    return {"status": "ok"}
 
 
 @app.patch("/submissions/{submission_id}/status")
@@ -334,6 +352,115 @@ async def approve_submission(
         )
 
     return result
+
+
+# ── STATS ────────────────────────────────────────────────────────────────────
+
+@app.get("/stats")
+async def get_stats(
+    settings: Settings = Depends(get_settings),
+    store: SubmissionStore = Depends(get_store),
+):
+    """Aggregated stats from flights.db and submissions.db."""
+    import sqlite3 as _sqlite3
+
+    result = {
+        "total_routes": 0,
+        "active_routes": 0,
+        "total_locations": 0,
+        "total_landing_zones": 0,
+        "routes_per_network": [],
+        "lz_per_location": [],
+        "submission_statuses": {},
+        "recent_approved": [],
+    }
+
+    # ── flights.db stats ─────────────────────────────────────────────────
+    flights_db = settings.instance_dir / "flights.db"
+    if flights_db.exists():
+        try:
+            conn = _sqlite3.connect(str(flights_db))
+            conn.row_factory = _sqlite3.Row
+
+            # Total & active routes
+            row = conn.execute("SELECT COUNT(*) as c FROM flight_routes").fetchone()
+            result["total_routes"] = row["c"] if row else 0
+            result["active_routes"] = result["total_routes"]  # assume all active
+
+            row = conn.execute("SELECT COUNT(*) as c FROM locations").fetchone()
+            result["total_locations"] = row["c"] if row else 0
+
+            row = conn.execute("SELECT COUNT(*) as c FROM landing_zones").fetchone()
+            result["total_landing_zones"] = row["c"] if row else 0
+
+            # Routes per network
+            try:
+                rows = conn.execute(
+                    "SELECT n.name, COUNT(fr.id) as cnt "
+                    "FROM flight_routes fr JOIN networks n ON fr.network_id = n.id "
+                    "GROUP BY n.name ORDER BY cnt DESC"
+                ).fetchall()
+                result["routes_per_network"] = [
+                    {"name": r["name"], "count": r["cnt"]} for r in rows
+                ]
+            except Exception:
+                pass
+
+            # LZ per location (top 10)
+            try:
+                rows = conn.execute(
+                    "SELECT l.name, COUNT(lz.id) as cnt "
+                    "FROM landing_zones lz JOIN locations l ON lz.location_id = l.id "
+                    "GROUP BY l.name ORDER BY cnt DESC LIMIT 10"
+                ).fetchall()
+                result["lz_per_location"] = [
+                    {"name": r["name"], "count": r["cnt"]} for r in rows
+                ]
+            except Exception:
+                pass
+
+            conn.close()
+        except Exception as e:
+            logger.warning("Stats: failed to read flights.db: %s", e)
+
+    # ── submissions.db stats ─────────────────────────────────────────────
+    try:
+        subs = store.list_submissions()
+        status_counts: dict[str, int] = {}
+        recent: list[dict] = []
+        for s in subs:
+            status_counts[s.status.value] = status_counts.get(s.status.value, 0) + 1
+            if s.status.value == "approved" and len(recent) < 10:
+                recent.append({
+                    "id": s.id,
+                    "route": f"{s.payload.source_location_name} → {s.payload.destination_location_name}",
+                    "mission_file": s.payload.mission_filename,
+                    "created_at": s.created_at,
+                })
+        result["submission_statuses"] = status_counts
+        result["recent_approved"] = recent
+    except Exception as e:
+        logger.warning("Stats: failed to read submissions: %s", e)
+
+    return result
+
+
+@app.get("/submissions/{submission_id}/pipeline-status")
+async def get_pipeline_status(
+    submission_id: str,
+    store: SubmissionStore = Depends(get_store),
+):
+    """Return current pipeline step/status for live UI polling during approval."""
+    sub = store.get_submission(submission_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    return {
+        "submission_id": submission_id,
+        "status": sub.status.value,
+        "download_status": sub.download_status.value,
+        "error_detail": sub.error_detail,
+    }
 
 
 # ── CONFIG ENDPOINT ─────────────────────────────────────────────────────────
