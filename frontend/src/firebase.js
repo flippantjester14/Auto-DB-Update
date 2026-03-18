@@ -3,7 +3,7 @@ import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-    apiKey: "AIzaSyD3IiHpjPTXymWh-3xZXsix_XwAmacFNJw",
+    apiKey: "Add-API-KEY",
     authDomain: "auto-db--updater.firebaseapp.com",
     projectId: "auto-db--updater",
     storageBucket: "auto-db--updater.firebasestorage.app",
