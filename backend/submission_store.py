@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from models import (
     DownloadStatus,
@@ -45,7 +45,12 @@ class SubmissionStore:
                 files_downloaded INTEGER NOT NULL DEFAULT 0,
                 waypoint_verified INTEGER NOT NULL DEFAULT 0,
                 id_resolution_reviewed INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                created_by_uid TEXT,
+                updated_by_uid TEXT,
+                deleted_at TEXT,
+                deleted_by_uid TEXT
             )
         """)
         # Migration: Add columns if they don't exist
@@ -61,20 +66,28 @@ class SubmissionStore:
             conn.execute("ALTER TABLE submissions ADD COLUMN id_resolution_reviewed INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        
+        # Migration: Add new V2 columns
+        for col in ["updated_at TEXT", "created_by_uid TEXT", "updated_by_uid TEXT", "deleted_at TEXT", "deleted_by_uid TEXT"]:
+            try:
+                conn.execute(f"ALTER TABLE submissions ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass
+                
         conn.commit()
         conn.close()
 
     # ── CRUD ─────────────────────────────────────────────────────────────
 
     def add_submission(
-        self, payload: SubmissionPayload, status: SubmissionStatus = SubmissionStatus.PENDING
+        self, payload: SubmissionPayload, status: SubmissionStatus = SubmissionStatus.PENDING, user_uid: Optional[str] = None
     ) -> str:
         submission_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         conn = self._get_conn()
         conn.execute(
-            """INSERT INTO submissions (id, payload, status, download_status, files_downloaded, waypoint_verified, id_resolution_reviewed, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO submissions (id, payload, status, download_status, files_downloaded, waypoint_verified, id_resolution_reviewed, created_at, created_by_uid)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 submission_id,
                 payload.model_dump_json(),
@@ -84,6 +97,7 @@ class SubmissionStore:
                 0,
                 0,
                 now,
+                user_uid,
             ),
         )
         conn.commit()
@@ -103,7 +117,7 @@ class SubmissionStore:
     def list_submissions(self) -> List[SubmissionResponse]:
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT * FROM submissions ORDER BY created_at DESC"
+            "SELECT * FROM submissions WHERE deleted_at IS NULL ORDER BY created_at DESC"
         ).fetchall()
         conn.close()
         return [self._row_to_response(r) for r in rows]
@@ -113,17 +127,19 @@ class SubmissionStore:
         submission_id: str,
         status: SubmissionStatus,
         error_detail: Optional[str] = None,
+        user_uid: Optional[str] = None,
     ) -> bool:
+        now = datetime.now(timezone.utc).isoformat()
         conn = self._get_conn()
         if error_detail:
             conn.execute(
-                "UPDATE submissions SET status = ?, error_detail = ? WHERE id = ?",
-                (status.value, error_detail, submission_id),
+                "UPDATE submissions SET status = ?, error_detail = ?, updated_at = ?, updated_by_uid = ? WHERE id = ?",
+                (status.value, error_detail, now, user_uid, submission_id),
             )
         else:
             conn.execute(
-                "UPDATE submissions SET status = ? WHERE id = ?",
-                (status.value, submission_id),
+                "UPDATE submissions SET status = ?, updated_at = ?, updated_by_uid = ? WHERE id = ?",
+                (status.value, now, user_uid, submission_id),
             )
         conn.commit()
         affected = conn.total_changes
@@ -136,25 +152,23 @@ class SubmissionStore:
         download_status: DownloadStatus,
         downloaded_files: Optional[dict] = None,
         error_detail: Optional[str] = None,
+        user_uid: Optional[str] = None,
     ) -> bool:
+        now = datetime.now(timezone.utc).isoformat()
         conn = self._get_conn()
         files_json = json.dumps(downloaded_files) if downloaded_files else None
         
-        # Determine if we should set files_downloaded to true
         is_completed = 1 if download_status == DownloadStatus.COMPLETED else 0
         
         if error_detail:
             conn.execute(
-                "UPDATE submissions SET download_status = ?, downloaded_files = ?, error_detail = ?, files_downloaded = ? WHERE id = ?",
-                (download_status.value, files_json, error_detail, is_completed, submission_id),
+                "UPDATE submissions SET download_status = ?, downloaded_files = ?, error_detail = ?, files_downloaded = ?, updated_at = ?, updated_by_uid = ? WHERE id = ?",
+                (download_status.value, files_json, error_detail, is_completed, now, user_uid, submission_id),
             )
         else:
-            # If status is NOT started or in progress, we might want to keep the old flag if it was already True?
-            # But usually it progresses NotStarted -> InProgress -> Completed.
-            # If it's Completed, we definitely set it to 1.
             conn.execute(
-                "UPDATE submissions SET download_status = ?, downloaded_files = ?, files_downloaded = ? WHERE id = ?",
-                (download_status.value, files_json, is_completed, submission_id),
+                "UPDATE submissions SET download_status = ?, downloaded_files = ?, files_downloaded = ?, updated_at = ?, updated_by_uid = ? WHERE id = ?",
+                (download_status.value, files_json, is_completed, now, user_uid, submission_id),
             )
         conn.commit()
         conn.close()
@@ -165,10 +179,12 @@ class SubmissionStore:
         submission_id: str,
         waypoint_verified: Optional[bool] = None,
         id_resolution_reviewed: Optional[bool] = None,
+        user_uid: Optional[str] = None,
     ) -> bool:
+        now = datetime.now(timezone.utc).isoformat()
         conn = self._get_conn()
-        updates = []
-        params = []
+        updates = ["updated_at = ?", "updated_by_uid = ?"]
+        params: list[Any] = [now, user_uid]
         if waypoint_verified is not None:
             updates.append("waypoint_verified = ?")
             params.append(1 if waypoint_verified else 0)
@@ -176,7 +192,7 @@ class SubmissionStore:
             updates.append("id_resolution_reviewed = ?")
             params.append(1 if id_resolution_reviewed else 0)
 
-        if not updates:
+        if len(updates) == 2: # Only updated_at and updated_by_uid
             conn.close()
             return False
 

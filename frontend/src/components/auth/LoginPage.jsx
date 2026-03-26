@@ -1,7 +1,22 @@
+import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 
 export default function LoginPage() {
     const { login } = useAuth();
+    const [errorMsg, setErrorMsg] = useState('');
+
+    const handleLogin = async () => {
+        setErrorMsg('');
+        try {
+            await login();
+        } catch (err) {
+            if (err.message === 'Invalid domain') {
+                setErrorMsg('Access denied. Please sign in with your @redwinglabs.in account.');
+            } else {
+                setErrorMsg('Failed to sign in. Please try again.');
+            }
+        }
+    };
 
     return (
         <div style={{
@@ -60,8 +75,31 @@ export default function LoginPage() {
                     Use your RedWing Google account
                 </p>
 
+                {errorMsg && (
+                    <div style={{
+                        marginBottom: '24px',
+                        padding: '12px',
+                        borderRadius: '6px',
+                        backgroundColor: '#FEF2F2',
+                        border: '1px solid #FCA5A5',
+                        color: '#991B1B',
+                        fontSize: '13px',
+                        textAlign: 'left',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '8px'
+                    }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginTop: '2px', flexShrink: 0 }}>
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="8" x2="12" y2="12"></line>
+                            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                        </svg>
+                        <span>{errorMsg}</span>
+                    </div>
+                )}
+
                 <button
-                    onClick={login}
+                    onClick={handleLogin}
                     style={{
                         width: '100%',
                         display: 'flex',

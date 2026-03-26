@@ -159,6 +159,7 @@ async def update_review_state(
         submission_id,
         waypoint_verified=request.waypoint_verified,
         id_resolution_reviewed=request.id_resolution_reviewed,
+        user_uid=user['uid']
     )
     if not affected:
         raise HTTPException(status_code=404, detail="Submission not found")
@@ -182,7 +183,7 @@ async def update_submission_status(
             detail="Can only set status to 'rejected' or 'pending' via this endpoint",
         )
 
-    store.update_status(submission_id, body.status, body.reason)
+    store.update_status(submission_id, body.status, body.reason, user_uid=user['uid'])
     return {"submission_id": submission_id, "status": body.status.value}
 
 
@@ -198,7 +199,7 @@ async def mark_as_duplicate(
     if sub is None:
         raise HTTPException(status_code=404, detail="Submission not found")
     
-    success = store.update_status(submission_id, SubmissionStatus.DUPLICATE)
+    success = store.update_status(submission_id, SubmissionStatus.DUPLICATE, user_uid=user['uid'])
     if not success:
         raise HTTPException(status_code=500, detail="Failed to update status")
     
@@ -216,7 +217,7 @@ async def download_files(
     if sub is None:
         raise HTTPException(status_code=404, detail="Submission not found")
 
-    store.update_download_status(submission_id, DownloadStatus.IN_PROGRESS)
+    store.update_download_status(submission_id, DownloadStatus.IN_PROGRESS, user_uid=user['uid'])
 
     result = await download_submission_files(
         sub.payload, settings.repo_path, settings.GNOME_GOA_ACCOUNT_PATH
@@ -231,12 +232,14 @@ async def download_files(
                 "elevation_image": result.elevation_image_path,
                 "route_image": result.route_image_path,
             },
+            user_uid=user['uid']
         )
     else:
         store.update_download_status(
             submission_id, 
             DownloadStatus.FAILED, 
-            error_detail=result.error
+            error_detail=result.error,
+            user_uid=user['uid']
         )
 
     return store.get_submission(submission_id)
@@ -475,5 +478,52 @@ async def get_cesium_token(settings: Settings = Depends(get_settings), user: dic
 # ── Health Check ─────────────────────────────────────────────────────────────
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "service": "redwing-db-automation"}
+async def health(settings: Settings = Depends(get_settings)):
+    import sqlite3
+    import httpx
+    status = {"status": "ok", "service": "redwing-db-automation", "components": {}}
+    
+    # Check submissions DB
+    try:
+        if Path(settings.SUBMISSIONS_DB_PATH).exists():
+            status["components"]["submissions_db"] = "ok"
+        else:
+            status["components"]["submissions_db"] = "missing"
+    except Exception as e:
+        status["components"]["submissions_db"] = f"error: {str(e)}"
+        
+    # Check flights DB (if applicable)
+    flights_db = settings.instance_dir / "flights.db"
+    try:
+        if flights_db.exists():
+            status["components"]["flights_db"] = "ok"
+        else:
+            status["components"]["flights_db"] = "missing"
+    except Exception as e:
+        status["components"]["flights_db"] = f"error: {str(e)}"
+        
+    # Check Excel
+    try:
+        if settings.excel_path.exists():
+            status["components"]["excel"] = "ok"
+        else:
+            status["components"]["excel"] = "missing"
+    except Exception as e:
+        status["components"]["excel"] = f"error: {str(e)}"
+        
+    # Check Ngrok
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("http://localhost:4040/api/tunnels", timeout=2.0)
+            if resp.status_code == 200:
+                tunnels = resp.json().get('tunnels', [])
+                if any(t.get('public_url') == f"https://{settings.NGROK_DOMAIN}" for t in tunnels):
+                    status["components"]["ngrok"] = "ok"
+                else:
+                    status["components"]["ngrok"] = "tunnel_missing_or_mismatch"
+            else:
+                status["components"]["ngrok"] = "api_error"
+    except Exception as e:
+        status["components"]["ngrok"] = f"unreachable"
+        
+    return status

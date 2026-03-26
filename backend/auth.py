@@ -10,9 +10,10 @@ firebase_admin.initialize_app(cred)
 fs_client = firestore.client()
 
 ROLE_HIERARCHY = {
-    'viewer':   1,
-    'operator': 2,
-    'admin':    3
+    'operator': 1,
+    'reviewer': 2,
+    'sde':      3,
+    'admin':    4
 }
 
 async def get_current_user(authorization: str = Header(None)):
@@ -29,9 +30,9 @@ async def get_current_user(authorization: str = Header(None)):
     # Fetch role from Firestore
     try:
         user_doc = fs_client.collection('users').document(decoded['uid']).get()
-        role = user_doc.to_dict().get('role', 'viewer') if user_doc.exists else 'viewer'
+        role = user_doc.to_dict().get('role', 'operator') if user_doc.exists else 'operator'
     except Exception:
-        role = 'viewer'
+        role = 'operator'
     
     return {
         'uid':   decoded['uid'],
@@ -52,6 +53,7 @@ def require_role(minimum_role: str):
     return checker
 
 # Convenience dependencies
-require_viewer   = Depends(require_role('viewer'))
 require_operator = Depends(require_role('operator'))
+require_reviewer = Depends(require_role('reviewer'))
+require_sde      = Depends(require_role('sde'))
 require_admin    = Depends(require_role('admin'))

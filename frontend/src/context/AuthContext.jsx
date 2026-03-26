@@ -4,44 +4,92 @@ import {
     signInWithPopup,
     signOut
 } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { auth, db, googleProvider } from '../firebase';
+import { useToast } from '../components/shared/Toast';
+import { ROLES } from '../constants';
 
 const AuthContext = createContext(null);
-
-export const ROLES = {
-    VIEWER: 'viewer',
-    OPERATOR: 'operator',
-    ADMIN: 'admin'
-};
 
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
+    const addToast = useToast();
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        let unsubscribeSnapshot = null;
+
+        const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+            if (unsubscribeSnapshot) {
+                unsubscribeSnapshot();
+                unsubscribeSnapshot = null;
+            }
+
             if (firebaseUser) {
-                // Fetch role from Firestore
+                // Enforce domain restriction
+                if (!firebaseUser.email.endsWith('@redwinglabs.in')) {
+                    await signOut(auth);
+                    setUser(null);
+                    setLoading(false);
+                    return;
+                }
+
                 try {
-                    const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-                    const role = userDoc.exists() ? userDoc.data().role : ROLES.VIEWER;
-                    setUser({
-                        uid: firebaseUser.uid,
-                        email: firebaseUser.email,
-                        displayName: firebaseUser.displayName,
-                        photoURL: firebaseUser.photoURL,
-                        role
+                    const userRef = doc(db, 'users', firebaseUser.uid);
+                    
+                    // First, ensure the document exists. If not, create it.
+                    const initialDoc = await getDoc(userRef);
+                    if (!initialDoc.exists()) {
+                        await setDoc(userRef, {
+                            role: ROLES.OPERATOR,
+                            display_name: firebaseUser.displayName,
+                            email: firebaseUser.email,
+                            created_at: serverTimestamp(),
+                            last_login: serverTimestamp()
+                        });
+                    } else {
+                        // Update last_login
+                        await updateDoc(userRef, {
+                            last_login: serverTimestamp()
+                        });
+                    }
+
+                    // Now set up real-time listener for role updates
+                    unsubscribeSnapshot = onSnapshot(userRef, (docSnap) => {
+                        let currentRole = ROLES.OPERATOR;
+                        if (docSnap.exists() && docSnap.data().role) {
+                            currentRole = docSnap.data().role;
+                        }
+
+                        setUser(prev => {
+                            // Only update if we already had a user (to avoid weird race conditions)
+                            // or if it's our first pass
+                            if (prev && prev.uid === firebaseUser.uid) {
+                                return { ...prev, role: currentRole };
+                            }
+                            return {
+                                uid: firebaseUser.uid,
+                                email: firebaseUser.email,
+                                displayName: firebaseUser.displayName,
+                                photoURL: firebaseUser.photoURL,
+                                role: currentRole
+                            };
+                        });
+                    }, (err) => {
+                        console.error('Failed to listen to user profile immediately:', err.code, err.message);
+                        addToast(`Firestore listener error: ${err.message}`);
+                        setUser(prev => prev ? { ...prev, role: ROLES.OPERATOR } : null);
                     });
+
                 } catch (err) {
-                    // Firestore fetch failed — default to viewer
-                    console.error('Failed to fetch user role:', err);
+                    console.error('Failed to handle user profile init:', err);
+                    addToast(`Profile initialization error: ${err.message}`);
                     setUser({
                         uid: firebaseUser.uid,
                         email: firebaseUser.email,
                         displayName: firebaseUser.displayName,
                         photoURL: firebaseUser.photoURL,
-                        role: ROLES.VIEWER
+                        role: ROLES.OPERATOR
                     });
                 }
             } else {
@@ -50,12 +98,20 @@ export function AuthProvider({ children }) {
             setLoading(false);
         });
 
-        return unsubscribe;
+        return () => {
+            unsubscribeAuth();
+            if (unsubscribeSnapshot) unsubscribeSnapshot();
+        };
     }, []);
 
     const login = async () => {
         try {
-            await signInWithPopup(auth, googleProvider);
+            const result = await signInWithPopup(auth, googleProvider);
+            if (!result.user.email.endsWith('@redwinglabs.in')) {
+                await signOut(auth);
+                addToast('Access denied: Must use a @redwinglabs.in account');
+                throw new Error('Invalid domain');
+            }
         } catch (err) {
             console.error('Login failed:', err);
             throw err;
