@@ -15,6 +15,15 @@ export const MAVLINK_COMMANDS = {
     203: 'DO_AUX_FUNCTION',
 };
 
+const COORD_FRAMES = {
+    0: 'GLOBAL',
+    3: 'GLOBAL_REL_ALT',
+    6: 'GLOBAL_INT',
+    10: 'TERRAIN_ALT',
+};
+
+const ACTION_COMMANDS = new Set([177, 178, 189, 203]);
+
 export function getCommandName(code) {
     return MAVLINK_COMMANDS[code] || `CMD_${code}`;
 }
@@ -34,11 +43,17 @@ export function parseWaypointsFile(text) {
         const parts = lines[i].trim().split(/\t/);
         if (parts.length < 12) continue;
 
+        const command = parseInt(parts[3], 10);
+        const coord_frame = parseInt(parts[2], 10);
+
         waypoints.push({
             index: parseInt(parts[0], 10),
             current_wp: parseInt(parts[1], 10),
-            coord_frame: parseInt(parts[2], 10),
-            command: parseInt(parts[3], 10),
+            coord_frame,
+            command,
+            command_name: getCommandName(command),
+            coord_frame_name: COORD_FRAMES[coord_frame] || `FRAME_${coord_frame}`,
+            is_action_command: ACTION_COMMANDS.has(command),
             param1: parseFloat(parts[4]),
             param2: parseFloat(parts[5]),
             param3: parseFloat(parts[6]),

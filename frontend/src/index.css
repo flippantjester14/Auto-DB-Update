@@ -288,7 +288,7 @@ a:hover {
 }
 
 .btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
+  background: #1D4ED8;
 }
 
 .btn-success {
@@ -310,8 +310,9 @@ a:hover {
 }
 
 .btn-danger:hover {
-  opacity: 0.9;
-  background: var(--danger);
+  background: #B91C1C;
+  color: #fff;
+  border-color: #B91C1C;
 }
 
 .btn-ghost {
@@ -706,13 +707,11 @@ a:hover {
 }
 
 .waypoint-table {
-  min-width: 900px;
+  min-width: 1050px;
   /* Force table wider than container so scroll triggers */
   width: max-content;
   /* Don't compress columns to fit */
   border-collapse: collapse;
-  /* table-layout: fixed; */
-  /* Removed to prevent truncation */
   font-size: 13px;
 }
 
@@ -721,13 +720,18 @@ a:hover {
   position: sticky;
   top: 0;
   z-index: 10;
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   text-align: left;
   font-size: 11px;
   text-transform: uppercase;
   color: var(--text-secondary);
   font-weight: 600;
+}
+
+.waypoint-table th:last-child {
+  border-right: none;
 }
 
 /* Exact column widths */
@@ -780,8 +784,13 @@ th.col-auto {
 }
 
 .waypoint-table td {
-  padding: 6px 12px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.waypoint-table td:last-child {
+  border-right: none;
 }
 
 .waypoint-table tr:hover {
