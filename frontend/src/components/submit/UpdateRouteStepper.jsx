@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Send, AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Send, AlertTriangle, CheckCircle, Loader2, Info } from 'lucide-react';
 import { api } from '../../api/api';
 import { useToast } from '../shared/Toast';
 import StepperProgress from './StepperProgress';
@@ -172,8 +172,7 @@ export default function UpdateRouteStepper() {
         }
     };
 
-    const canSubmit = serverValidation?.is_valid &&
-        !duplicateCheck?.is_exact_duplicate && !submitting;
+    const canSubmit = serverValidation?.is_valid && !submitting;
 
     const changedFields = getChangedFields();
 
@@ -307,15 +306,15 @@ export default function UpdateRouteStepper() {
                         )}
 
                         {duplicateCheck?.is_exact_duplicate && (
-                            <div className="validation-box validation-error">
-                                <AlertTriangle size={16} />
-                                <div>{duplicateCheck.message}</div>
+                            <div className="validation-box validation-info">
+                                <Info size={16} />
+                                <div>Note: {duplicateCheck.message}</div>
                             </div>
                         )}
 
-                        {serverValidation?.is_valid && !duplicateCheck?.is_exact_duplicate && (
+                        {serverValidation?.is_valid && (
                             <div className="validation-box validation-success">
-                                <CheckCircle size={16} /> All checks passed
+                                <CheckCircle size={16} /> Ready to submit update
                             </div>
                         )}
 
