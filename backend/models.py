@@ -65,6 +65,7 @@ class SubmissionResponse(BaseModel):
     files_downloaded: bool = False
     waypoint_verified: bool = False
     id_resolution_reviewed: bool = False
+    source: str = "webhook"
 
 
 # ── Status Update ────────────────────────────────────────────────────────────
@@ -163,3 +164,54 @@ class DownloadResult(BaseModel):
     elevation_image_path: Optional[str] = None
     route_image_path: Optional[str] = None
     error: Optional[str] = None
+
+
+# ── Validation Result ───────────────────────────────────────────────────────
+
+class ValidationResponse(BaseModel):
+    is_valid: bool
+    errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    drive_link_errors: List[str] = Field(default_factory=list)
+
+
+# ── Network & Route Info (from flights.db) ──────────────────────────────────
+
+class NetworkInfo(BaseModel):
+    id: int
+    name: str
+    route_count: int = 0
+
+
+class LandingZoneInfo(BaseModel):
+    id: int
+    name: str
+    latitude: float
+    longitude: float
+    location_id: int
+    location_name: str
+
+
+class RouteInfo(BaseModel):
+    id: int
+    network_id: int
+    start_location_name: str
+    end_location_name: str
+    start_lz_name: str
+    end_lz_name: str
+    start_latitude: float
+    start_longitude: float
+    end_latitude: float
+    end_longitude: float
+    takeoff_direction: int
+    approach_direction: int
+    mission_filename: Optional[str] = None
+    status: Optional[int] = None
+
+
+class DuplicateCheckResponse(BaseModel):
+    is_exact_duplicate: bool = False
+    is_near_duplicate: bool = False
+    exact_match_id: Optional[str] = None
+    near_matches: List[Dict[str, Any]] = Field(default_factory=list)
+    message: str = ""

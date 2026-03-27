@@ -1,6 +1,7 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, BarChart3, Map } from 'lucide-react';
+import { LayoutDashboard, BarChart3, Map, PlusCircle } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 const NAV_ITEMS = [
     {
@@ -25,6 +26,9 @@ const NAV_ITEMS = [
 export default function Sidebar({ pendingCount = 0 }) {
     const location = useLocation();
     const navigate = useNavigate();
+    const { user } = useAuth();
+
+    const canSubmit = user && (user.role === 'operator' || user.role === 'admin');
 
     const isActive = (item) => {
         if (item.filter !== undefined) {
@@ -38,6 +42,21 @@ export default function Sidebar({ pendingCount = 0 }) {
 
     return (
         <nav className="sidebar">
+            {/* Actions section — operator/admin only */}
+            {canSubmit && (
+                <div className="sidebar-section">
+                    <div className="sidebar-section-title">Actions</div>
+                    <a
+                        className={`sidebar-item ${location.pathname.startsWith('/submit') ? 'active' : ''}`}
+                        onClick={(e) => { e.preventDefault(); navigate('/submit'); }}
+                        href="/submit"
+                    >
+                        <PlusCircle size={16} />
+                        New Submission
+                    </a>
+                </div>
+            )}
+
             {NAV_ITEMS.map((group) => (
                 <div key={group.section} className="sidebar-section">
                     <div className="sidebar-section-title">{group.section}</div>
@@ -63,3 +82,4 @@ export default function Sidebar({ pendingCount = 0 }) {
         </nav>
     );
 }
+

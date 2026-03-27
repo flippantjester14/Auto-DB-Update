@@ -103,4 +103,27 @@ export const api = {
 
     // ── Config ──────────────────────────────────────────────────────────
     getCesiumToken: () => authFetch('/config/cesium-token'),
+
+    // ── Submit (Phase 2) ────────────────────────────────────────────────
+    createSubmission: (payload) =>
+        authFetch('/submissions', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        }),
+
+    validateSubmission: (payload) =>
+        authFetch('/submissions/validate', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        }),
+
+    checkDuplicate: (payload) =>
+        authFetch('/submissions/check-duplicate', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        }),
+
+    // ── Networks & Routes ───────────────────────────────────────────────
+    getNetworks: () => authFetch('/networks'),
+    getNetworkRoutes: (networkId) => authFetch(`/networks/${networkId}/routes`),
 };

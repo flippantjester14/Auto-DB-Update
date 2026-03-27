@@ -21,17 +21,22 @@ from models import (
     ApprovalRequest,
     DownloadResult,
     DownloadStatus,
+    DuplicateCheckResponse,
+    NetworkInfo,
     PipelineResult,
     ResolvePreviewResponse,
     ReviewStateUpdateRequest,
+    RouteInfo,
     StatusUpdateRequest,
     SubmissionPayload,
     SubmissionResponse,
     SubmissionStatus,
+    ValidationResponse,
     WaypointFileResponse,
 )
 from pipeline import run_approval_pipeline
 from submission_store import SubmissionStore
+from validation import validate_submission, validate_all_drive_links
 from waypoint_parser import parse_waypoints_file
 
 logging.basicConfig(
@@ -108,6 +113,12 @@ async def webhook_new_submission(
     settings: Settings = Depends(get_settings),
 ):
     """Receive a new submission from Google Apps Script webhook."""
+    # Run shared validation
+    validation = validate_submission(payload)
+    if not validation.is_valid:
+        logger.warning(f"Webhook submission failed validation: {validation.errors}")
+        raise HTTPException(status_code=422, detail=f"Validation failed: {'; '.join(validation.errors)}")
+
     # Check for duplicate in Excel
     status = SubmissionStatus.PENDING
     
@@ -123,9 +134,245 @@ async def webhook_new_submission(
         finally:
             updater.close()
 
-    submission_id = store.add_submission(payload, status=status)
+    submission_id = store.add_submission(payload, status=status, source="webhook")
     logger.info(f"New submission received: {submission_id} (Status: {status})")
-    return {"submission_id": submission_id, "status": status.value}
+    return {
+        "submission_id": submission_id,
+        "status": status.value,
+        "warnings": validation.warnings,
+    }
+
+
+# ── 1b. UI SUBMISSION — Submit via Frontend ─────────────────────────────────
+
+@app.post("/submissions", status_code=200)
+async def create_submission(
+    payload: SubmissionPayload,
+    store: SubmissionStore = Depends(get_store),
+    settings: Settings = Depends(get_settings),
+    user: dict = Depends(require_role('operator')),
+):
+    """Create a new submission from the frontend UI."""
+    # Run shared validation
+    validation = validate_submission(payload)
+    if not validation.is_valid:
+        raise HTTPException(status_code=422, detail={
+            "message": "Validation failed",
+            "errors": validation.errors,
+            "warnings": validation.warnings,
+        })
+
+    # Check for duplicate in Excel
+    status = SubmissionStatus.PENDING
+
+    if settings.excel_path.exists():
+        updater = ExcelUpdater(settings.excel_path)
+        try:
+            updater.open()
+            if updater.is_duplicate_submission(payload):
+                status = SubmissionStatus.DUPLICATE
+                logger.info(f"UI submission duplicate detected")
+        except Exception as e:
+            logger.error(f"Error checking for duplicate: {e}")
+        finally:
+            updater.close()
+
+    submission_id = store.add_submission(
+        payload, status=status, user_uid=user['uid'], source="ui"
+    )
+    logger.info(f"UI submission created: {submission_id} by {user['email']}")
+    return {
+        "submission_id": submission_id,
+        "status": status.value,
+        "warnings": validation.warnings,
+    }
+
+
+# ── 1c. VALIDATE — Dry-run validation (no store) ────────────────────────────
+
+@app.post("/submissions/validate", response_model=ValidationResponse)
+async def validate_submission_endpoint(
+    payload: SubmissionPayload,
+    user: dict = Depends(require_role('operator')),
+):
+    """Dry-run validation of a submission payload. Includes server-side Drive link check."""
+    validation = validate_submission(payload)
+
+    # Server-side Drive link accessibility check
+    drive_errors = await validate_all_drive_links(payload)
+
+    return ValidationResponse(
+        is_valid=validation.is_valid and len(drive_errors) == 0,
+        errors=validation.errors,
+        warnings=validation.warnings,
+        drive_link_errors=drive_errors,
+    )
+
+
+# ── 1d. DUPLICATE CHECK — Check submissions.db + flights.db ─────────────────
+
+@app.post("/submissions/check-duplicate", response_model=DuplicateCheckResponse)
+async def check_duplicate(
+    payload: SubmissionPayload,
+    store: SubmissionStore = Depends(get_store),
+    settings: Settings = Depends(get_settings),
+    user: dict = Depends(require_role('operator')),
+):
+    """Check for exact and near-duplicate submissions in submissions.db and flights.db."""
+    import sqlite3 as _sqlite3
+
+    result = DuplicateCheckResponse()
+
+    # 1. Check submissions.db for exact duplicate payloads
+    existing_subs = store.list_submissions()
+    for sub in existing_subs:
+        if sub.status in (SubmissionStatus.REJECTED,):
+            continue
+        p = sub.payload
+        if (
+            p.mission_filename == payload.mission_filename
+            and abs(p.source_latitude - payload.source_latitude) < 0.0001
+            and abs(p.source_longitude - payload.source_longitude) < 0.0001
+            and abs(p.destination_latitude - payload.destination_latitude) < 0.0001
+            and abs(p.destination_longitude - payload.destination_longitude) < 0.0001
+            and p.takeoff_direction == payload.takeoff_direction
+            and p.approach_direction == payload.approach_direction
+        ):
+            result.is_exact_duplicate = True
+            result.exact_match_id = sub.id
+            result.message = f"Exact duplicate of submission #{sub.id[:8]} ({sub.status.value})"
+            return result
+
+    # 2. Check flights.db for already-approved routes
+    flights_db = settings.instance_dir / "flights.db"
+    if flights_db.exists():
+        try:
+            conn = _sqlite3.connect(str(flights_db))
+            conn.row_factory = _sqlite3.Row
+            rows = conn.execute("""
+                SELECT fr.id, slz.latitude as s_lat, slz.longitude as s_lng,
+                       elz.latitude as e_lat, elz.longitude as e_lng,
+                       fr.takeoff_direction, fr.approach_direction,
+                       wf.filename
+                FROM flight_routes fr
+                JOIN landing_zones slz ON fr.start_lz_id = slz.id
+                JOIN landing_zones elz ON fr.end_lz_id = elz.id
+                JOIN waypoint_files wf ON fr.waypoint_file_id = wf.id
+            """).fetchall()
+            conn.close()
+
+            for r in rows:
+                is_exact = (
+                    r["filename"] == payload.mission_filename
+                    and abs(r["s_lat"] - payload.source_latitude) < 0.0001
+                    and abs(r["s_lng"] - payload.source_longitude) < 0.0001
+                    and abs(r["e_lat"] - payload.destination_latitude) < 0.0001
+                    and abs(r["e_lng"] - payload.destination_longitude) < 0.0001
+                )
+                if is_exact:
+                    result.is_exact_duplicate = True
+                    result.message = f"Route already exists in flights database (Route ID: {r['id']})"
+                    return result
+
+                # Near-duplicate check (coords within 0.001°)
+                is_near = (
+                    abs(r["s_lat"] - payload.source_latitude) < 0.001
+                    and abs(r["s_lng"] - payload.source_longitude) < 0.001
+                    and abs(r["e_lat"] - payload.destination_latitude) < 0.001
+                    and abs(r["e_lng"] - payload.destination_longitude) < 0.001
+                )
+                if is_near:
+                    result.is_near_duplicate = True
+                    result.near_matches.append({
+                        "route_id": r["id"],
+                        "filename": r["filename"],
+                        "s_lat": r["s_lat"], "s_lng": r["s_lng"],
+                        "e_lat": r["e_lat"], "e_lng": r["e_lng"],
+                    })
+        except Exception as e:
+            logger.warning(f"Duplicate check: failed to query flights.db: {e}")
+
+    if result.is_near_duplicate:
+        result.message = f"Found {len(result.near_matches)} near-duplicate route(s) within 0.001°"
+    else:
+        result.message = "No duplicates found"
+
+    return result
+
+
+# ── NETWORKS & ROUTES (from flights.db) ──────────────────────────────────────
+
+@app.get("/networks", response_model=list[NetworkInfo])
+async def list_networks(
+    settings: Settings = Depends(get_settings),
+    user: dict = Depends(get_current_user),
+):
+    """List all networks from flights.db with route counts."""
+    import sqlite3 as _sqlite3
+
+    flights_db = settings.instance_dir / "flights.db"
+    if not flights_db.exists():
+        raise HTTPException(status_code=404, detail="flights.db not found")
+
+    conn = _sqlite3.connect(str(flights_db))
+    conn.row_factory = _sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT n.id, n.name, COUNT(fr.id) as route_count
+            FROM networks n
+            LEFT JOIN flight_routes fr ON fr.network_id = n.id
+            GROUP BY n.id, n.name
+            ORDER BY n.name
+        """).fetchall()
+        return [NetworkInfo(id=r["id"], name=r["name"], route_count=r["route_count"]) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.get("/networks/{network_id}/routes", response_model=list[RouteInfo])
+async def get_network_routes(
+    network_id: int,
+    settings: Settings = Depends(get_settings),
+    user: dict = Depends(get_current_user),
+):
+    """List all routes for a network from flights.db with full details."""
+    import sqlite3 as _sqlite3
+
+    flights_db = settings.instance_dir / "flights.db"
+    if not flights_db.exists():
+        raise HTTPException(status_code=404, detail="flights.db not found")
+
+    conn = _sqlite3.connect(str(flights_db))
+    conn.row_factory = _sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT
+                fr.id,
+                fr.network_id,
+                sl.name as start_location_name,
+                el.name as end_location_name,
+                slz.name as start_lz_name,
+                elz.name as end_lz_name,
+                slz.latitude as start_latitude,
+                slz.longitude as start_longitude,
+                elz.latitude as end_latitude,
+                elz.longitude as end_longitude,
+                fr.takeoff_direction,
+                fr.approach_direction,
+                wf.filename as mission_filename,
+                fr.status
+            FROM flight_routes fr
+            JOIN landing_zones slz ON fr.start_lz_id = slz.id
+            JOIN landing_zones elz ON fr.end_lz_id = elz.id
+            JOIN locations sl ON fr.start_location_id = sl.id
+            JOIN locations el ON fr.end_location_id = el.id
+            JOIN waypoint_files wf ON fr.waypoint_file_id = wf.id
+            WHERE fr.network_id = ?
+            ORDER BY fr.id
+        """, (network_id,)).fetchall()
+        return [RouteInfo(**dict(r)) for r in rows]
+    finally:
+        conn.close()
 
 
 # ── 2. SUBMISSIONS API ──────────────────────────────────────────────────────

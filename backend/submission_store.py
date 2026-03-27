@@ -68,7 +68,7 @@ class SubmissionStore:
             pass
         
         # Migration: Add new V2 columns
-        for col in ["updated_at TEXT", "created_by_uid TEXT", "updated_by_uid TEXT", "deleted_at TEXT", "deleted_by_uid TEXT"]:
+        for col in ["updated_at TEXT", "created_by_uid TEXT", "updated_by_uid TEXT", "deleted_at TEXT", "deleted_by_uid TEXT", "source TEXT DEFAULT 'webhook'"]:
             try:
                 conn.execute(f"ALTER TABLE submissions ADD COLUMN {col}")
             except sqlite3.OperationalError:
@@ -80,14 +80,14 @@ class SubmissionStore:
     # ── CRUD ─────────────────────────────────────────────────────────────
 
     def add_submission(
-        self, payload: SubmissionPayload, status: SubmissionStatus = SubmissionStatus.PENDING, user_uid: Optional[str] = None
+        self, payload: SubmissionPayload, status: SubmissionStatus = SubmissionStatus.PENDING, user_uid: Optional[str] = None, source: str = "webhook"
     ) -> str:
         submission_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         conn = self._get_conn()
         conn.execute(
-            """INSERT INTO submissions (id, payload, status, download_status, files_downloaded, waypoint_verified, id_resolution_reviewed, created_at, created_by_uid)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO submissions (id, payload, status, download_status, files_downloaded, waypoint_verified, id_resolution_reviewed, created_at, created_by_uid, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 submission_id,
                 payload.model_dump_json(),
@@ -98,6 +98,7 @@ class SubmissionStore:
                 0,
                 now,
                 user_uid,
+                source,
             ),
         )
         conn.commit()
@@ -210,6 +211,11 @@ class SubmissionStore:
         downloaded_files = None
         if row["downloaded_files"]:
             downloaded_files = json.loads(row["downloaded_files"])
+        # Handle source column gracefully (may not exist in old DBs)
+        try:
+            source = row["source"] or "webhook"
+        except (IndexError, KeyError):
+            source = "webhook"
         return SubmissionResponse(
             id=row["id"],
             payload=SubmissionPayload.model_validate_json(row["payload"]),
@@ -221,4 +227,5 @@ class SubmissionStore:
             files_downloaded=bool(row["files_downloaded"]),
             waypoint_verified=bool(row["waypoint_verified"]),
             id_resolution_reviewed=bool(row["id_resolution_reviewed"]),
+            source=source,
         )
