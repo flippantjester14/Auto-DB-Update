@@ -7,6 +7,7 @@ import WaypointViewerTab from '../tabs/WaypointViewerTab';
 import FilesTab from '../tabs/FilesTab';
 import IDResolutionTab from '../tabs/IDResolutionTab';
 import RequiresRole from '../shared/RequiresRole';
+import DiffDisplay from '../submit/DiffDisplay';
 
 const TABS = [
     { name: 'Waypoint Viewer', id: 'waypoints' },
@@ -24,6 +25,7 @@ export default function SubmissionDetail() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [activeTab, setActiveTab] = useState(0);
+    const [originalRoute, setOriginalRoute] = useState(null);
     const [approving, setApproving] = useState(false);
     const [rejectReason, setRejectReason] = useState('');
     const [showRejectModal, setShowRejectModal] = useState(false);
@@ -57,6 +59,30 @@ export default function SubmissionDetail() {
                     console.error("Failed to load waypoint data:", err);
                 }
             }
+            if (data.payload.is_update && data.payload.update_for_route_id) {
+                try {
+                    const od = await api.getRoute(data.payload.update_for_route_id);
+                    setOriginalRoute({
+                        network_name: data.payload.network_name,
+                        source_location_name: od.start_location_name,
+                        source_takeoff_zone_name: od.start_lz_name,
+                        source_latitude: od.start_latitude,
+                        source_longitude: od.start_longitude,
+                        destination_location_name: od.end_location_name,
+                        destination_landing_zone_name: od.end_lz_name,
+                        destination_latitude: od.end_latitude,
+                        destination_longitude: od.end_longitude,
+                        takeoff_direction: od.takeoff_direction,
+                        approach_direction: od.approach_direction,
+                        mission_filename: od.mission_filename || '',
+                        mission_drive_link: '',
+                        elevation_image_drive_link: '',
+                        route_image_drive_link: '',
+                    });
+                } catch (err) {
+                    console.error("Failed to load original route for diff:", err);
+                }
+            }
         } catch (err) {
             setError(err.message);
         } finally {
@@ -72,6 +98,12 @@ export default function SubmissionDetail() {
         if (tab === 'files') setActiveTab(1);
         else if (tab === 'resolution') setActiveTab(2);
     }, [searchParams]);
+
+    useEffect(() => {
+        if (sub && sub.payload.is_update && activeTab === 0 && !searchParams.get('tab')) {
+            setActiveTab(-1);
+        }
+    }, [sub, searchParams]);
 
     if (loading) return <div className="loading-state">Loading submission...</div>;
     if (!sub) return <div className="banner banner-error">Submission not found.</div>;
@@ -190,6 +222,14 @@ export default function SubmissionDetail() {
                 {/* Tab and Action Row */}
                 <div className="flex items-center justify-between border-bottom mb-24" style={{ borderBottom: '1px solid var(--border)' }}>
                     <div className="tabs" style={{ borderBottom: 'none', marginBottom: 0 }}>
+                        {sub.payload.is_update && (
+                            <button
+                                className={`tab ${activeTab === -1 ? 'active' : ''}`}
+                                onClick={() => setActiveTab(-1)}
+                            >
+                                Changes
+                            </button>
+                        )}
                         {TABS.map((tab, i) => {
                             const isLocked = tab.locked && !idResolutionUnlocked;
                             return (
@@ -235,6 +275,15 @@ export default function SubmissionDetail() {
 
                 {/* Tab Content */}
                 <div className="tab-content" style={{ padding: '0 24px' }}>
+                    {activeTab === -1 && sub.payload.is_update && (
+                        <div style={{ paddingTop: '24px' }}>
+                            {originalRoute ? (
+                                <DiffDisplay originalData={originalRoute} editedData={sub.payload} />
+                            ) : (
+                                <div className="banner banner-error">Loading original route data or none provided...</div>
+                            )}
+                        </div>
+                    )}
                     {activeTab === 0 && (
                         <WaypointViewerTab waypoints={waypoints} sub={sub} />
                     )}

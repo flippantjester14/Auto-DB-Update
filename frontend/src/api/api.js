@@ -126,4 +126,5 @@ export const api = {
     // ── Networks & Routes ───────────────────────────────────────────────
     getNetworks: () => authFetch('/networks'),
     getNetworkRoutes: (networkId) => authFetch(`/networks/${networkId}/routes`),
+    getRoute: (routeId) => authFetch(`/routes/${routeId}`),
 };

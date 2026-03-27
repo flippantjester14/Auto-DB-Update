@@ -375,6 +375,55 @@ async def get_network_routes(
         conn.close()
 
 
+@app.get("/routes/{route_id}", response_model=RouteInfo)
+async def get_route(
+    route_id: int,
+    settings: Settings = Depends(get_settings),
+    user: dict = Depends(get_current_user),
+):
+    """Get full details of a specific route from flights.db."""
+    import sqlite3 as _sqlite3
+
+    flights_db = settings.instance_dir / "flights.db"
+    if not flights_db.exists():
+        raise HTTPException(status_code=404, detail="flights.db not found")
+
+    conn = _sqlite3.connect(str(flights_db))
+    conn.row_factory = _sqlite3.Row
+    try:
+        row = conn.execute("""
+            SELECT
+                fr.id,
+                fr.network_id,
+                sl.name as start_location_name,
+                el.name as end_location_name,
+                slz.name as start_lz_name,
+                elz.name as end_lz_name,
+                slz.latitude as start_latitude,
+                slz.longitude as start_longitude,
+                elz.latitude as end_latitude,
+                elz.longitude as end_longitude,
+                fr.takeoff_direction,
+                fr.approach_direction,
+                wf.filename as mission_filename,
+                fr.status
+            FROM flight_routes fr
+            JOIN landing_zones slz ON fr.start_lz_id = slz.id
+            JOIN landing_zones elz ON fr.end_lz_id = elz.id
+            JOIN locations sl ON fr.start_location_id = sl.id
+            JOIN locations el ON fr.end_location_id = el.id
+            JOIN waypoint_files wf ON fr.waypoint_file_id = wf.id
+            WHERE fr.id = ?
+        """, (route_id,)).fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Route not found")
+            
+        return RouteInfo(**dict(row))
+    finally:
+        conn.close()
+
+
 # ── 2. SUBMISSIONS API ──────────────────────────────────────────────────────
 
 @app.get("/submissions", response_model=list[SubmissionResponse])
