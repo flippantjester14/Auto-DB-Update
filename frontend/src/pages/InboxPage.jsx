@@ -109,6 +109,15 @@ export default function InboxPage() {
                                         <span className="table-route-arrow"> → </span>
                                         {sub.payload.destination_location_name}
                                     </span>
+                                    {sub.payload.is_update && (
+                                        <span style={{
+                                            marginLeft: '8px', fontSize: '0.65rem', fontWeight: 600,
+                                            padding: '2px 6px', borderRadius: '4px',
+                                            backgroundColor: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd'
+                                        }}>
+                                            UPDATE
+                                        </span>
+                                    )}
                                 </td>
                                 <td className="table-meta">{sub.payload.mission_filename}</td>
                                 <td className="table-meta">{sub.payload.network_name}</td>

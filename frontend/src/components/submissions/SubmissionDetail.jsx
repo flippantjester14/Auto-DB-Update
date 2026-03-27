@@ -167,6 +167,15 @@ export default function SubmissionDetail() {
                     <h1>Submission #{id.slice(0, 6)}</h1>
                     <span style={{ margin: '0 8px' }}>—</span>
                     <span style={{ fontWeight: 500 }}>{p.source_location_name} → {p.destination_location_name}</span>
+                    {p.is_update && (
+                        <span style={{
+                            marginLeft: '12px', fontSize: '0.7rem', fontWeight: 600,
+                            padding: '2px 6px', borderRadius: '4px',
+                            backgroundColor: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd'
+                        }}>
+                            UPDATE
+                        </span>
+                    )}
                     <div style={{ marginLeft: '12px' }}>
                         <StatusBadge status={sub.status} />
                     </div>

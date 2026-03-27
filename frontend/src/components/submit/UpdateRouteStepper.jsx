@@ -136,6 +136,7 @@ export default function UpdateRouteStepper() {
         destination_longitude: Number(editedData.destination_longitude),
         takeoff_direction: Number(editedData.takeoff_direction),
         approach_direction: Number(editedData.approach_direction),
+        is_update: true,
     });
 
     useEffect(() => {

@@ -50,7 +50,7 @@ class SubmissionPayload(BaseModel):
     mission_drive_link: str
     elevation_image_drive_link: str
     route_image_drive_link: str
-
+    is_update: bool = False
 
 # ── Submission Response ──────────────────────────────────────────────────────
 
