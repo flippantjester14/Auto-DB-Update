@@ -1,9 +1,11 @@
-import { useAuth, ROLES } from '../../context/AuthContext';
+import { useAuth } from '../../context/AuthContext';
+import { ROLES } from '../../constants';
 
 const ROLE_HIERARCHY = {
-    [ROLES.VIEWER]: 1,
-    [ROLES.OPERATOR]: 2,
-    [ROLES.ADMIN]: 3
+    [ROLES.OPERATOR]: 1,
+    [ROLES.REVIEWER]: 2,
+    [ROLES.SDE]: 3,
+    [ROLES.ADMIN]: 4
 };
 
 export default function RequiresRole({ role, children, fallback = null }) {

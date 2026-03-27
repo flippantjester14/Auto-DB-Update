@@ -21,8 +21,18 @@ class Settings(BaseSettings):
     # ── GNOME Online Accounts (for authenticated Google Drive access) ────
     GNOME_GOA_ACCOUNT_PATH: str = "/org/gnome/OnlineAccounts/Accounts/account_1773050616_0"
 
-    # ── Auth ─────────────────────────────────────────────────────────────
+    # ── Auth & Webhook ───────────────────────────────────────────────────
     WEBHOOK_SECRET: str = "changeme"
+
+    # ── Email & SMTP ─────────────────────────────────────────────────────
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    EMAIL_FROM_ADDRESS: str = "no-reply@redwinglabs.in"
+
+    # ── Server ───────────────────────────────────────────────────────────
+    NGROK_DOMAIN: str = ""
 
     # ── Frontend ─────────────────────────────────────────────────────────
     CESIUM_ION_TOKEN: str = ""

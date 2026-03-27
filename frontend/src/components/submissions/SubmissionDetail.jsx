@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, CheckCircle, Lock } from 'lucide-react';
 import { api } from '../../api/api';
 import StatusBadge from '../shared/StatusBadge';
@@ -17,6 +17,7 @@ const TABS = [
 export default function SubmissionDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const [sub, setSub] = useState(null);
     const [preview, setPreview] = useState(null);
     const [waypoints, setWaypoints] = useState(null);
@@ -64,6 +65,13 @@ export default function SubmissionDetail() {
     };
 
     useEffect(() => { loadSubmission(); }, [id]);
+
+    // Respond to ?tab= query param from nav buttons
+    useEffect(() => {
+        const tab = searchParams.get('tab');
+        if (tab === 'files') setActiveTab(1);
+        else if (tab === 'resolution') setActiveTab(2);
+    }, [searchParams]);
 
     if (loading) return <div className="loading-state">Loading submission...</div>;
     if (!sub) return <div className="banner banner-error">Submission not found.</div>;

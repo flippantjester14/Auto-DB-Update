@@ -3,7 +3,7 @@ import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-    apiKey: "Add-API-KEY",
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
     authDomain: "auto-db--updater.firebaseapp.com",
     projectId: "auto-db--updater",
     storageBucket: "auto-db--updater.firebasestorage.app",

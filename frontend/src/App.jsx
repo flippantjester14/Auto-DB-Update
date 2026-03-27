@@ -31,23 +31,23 @@ function AppContent() {
     if (!user) return <LoginPage />;
 
     return (
-        <ToastProvider>
-            <AppShell>
-                <Routes>
-                    <Route path="/" element={<InboxPage />} />
-                    <Route path="/submissions/:id" element={<SubmissionDetail />} />
-                    <Route path="/stats" element={<StatsPage />} />
-                    <Route path="/viewer" element={<ViewerPage />} />
-                </Routes>
-            </AppShell>
-        </ToastProvider>
+        <AppShell>
+            <Routes>
+                <Route path="/" element={<InboxPage />} />
+                <Route path="/submissions/:id" element={<SubmissionDetail />} />
+                <Route path="/stats" element={<StatsPage />} />
+                <Route path="/viewer" element={<ViewerPage />} />
+            </Routes>
+        </AppShell>
     );
 }
 
 export default function App() {
     return (
-        <AuthProvider>
-            <AppContent />
-        </AuthProvider>
+        <ToastProvider>
+            <AuthProvider>
+                <AppContent />
+            </AuthProvider>
+        </ToastProvider>
     );
 }
