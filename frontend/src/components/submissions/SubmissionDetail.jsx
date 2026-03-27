@@ -15,6 +15,17 @@ const TABS = [
     { name: 'ID Resolution', id: 'resolution', locked: true },
 ];
 
+const FIELD_LABELS = {
+    network_name: 'Network', source_location_name: 'Source Location',
+    source_takeoff_zone_name: 'Takeoff Zone', source_latitude: 'Source Lat',
+    source_longitude: 'Source Lng', destination_location_name: 'Dest Location',
+    destination_landing_zone_name: 'Landing Zone', destination_latitude: 'Dest Lat',
+    destination_longitude: 'Dest Lng', takeoff_direction: 'Takeoff Dir',
+    approach_direction: 'Approach Dir', mission_filename: 'Mission File',
+    mission_drive_link: 'Mission Link', elevation_image_drive_link: 'Elevation Link',
+    route_image_drive_link: 'Route Image Link',
+};
+
 export default function SubmissionDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
@@ -276,9 +287,16 @@ export default function SubmissionDetail() {
                 {/* Tab Content */}
                 <div className="tab-content" style={{ padding: '0 24px' }}>
                     {activeTab === -1 && sub.payload.is_update && (
-                        <div style={{ paddingTop: '24px' }}>
+                        <div style={{ paddingTop: '24px' }} className="diff-summary">
                             {originalRoute ? (
-                                <DiffDisplay originalData={originalRoute} editedData={sub.payload} />
+                                Object.keys(FIELD_LABELS).map(key => (
+                                    <DiffDisplay
+                                        key={key}
+                                        label={FIELD_LABELS[key]}
+                                        oldValue={originalRoute[key]}
+                                        newValue={sub.payload[key]}
+                                    />
+                                ))
                             ) : (
                                 <div className="banner banner-error">Loading original route data or none provided...</div>
                             )}
