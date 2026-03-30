@@ -1430,7 +1430,7 @@ th.col-auto {
 
 /* Stepper Container */
 .stepper-container {
-  max-width: 720px;
+  max-width: 1000px;
 }
 
 .stepper-content {
@@ -1516,7 +1516,7 @@ th.col-auto {
   font-family: 'Barlow Condensed', sans-serif;
   font-size: 16px;
   font-weight: 600;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   color: var(--text);
 }
 
@@ -1524,7 +1524,7 @@ th.col-auto {
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 12px;
 }
 
 .form-group {
@@ -1829,21 +1829,29 @@ th.col-auto {
   color: var(--text);
 }
 
-/* ── Match Badges ─────────────────────────────────────────────────────────── */
+.sections-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: stretch;
+}
+
+/* --- Match Badges --- */
 .match-section {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 16px;
+  padding: 12px;
+  height: 100%;
 }
 
 .match-section-title {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-secondary);
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .match-badge {
@@ -1876,4 +1884,118 @@ th.col-auto {
   margin-left: 6px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* ── LZ Management ──────────────────────────────────────────────────────── */
+.lz-mgmt-container {
+  max-width: 1200px;
+}
+
+.lz-mgmt-search {
+  position: relative;
+  margin-bottom: 20px;
+}
+
+.lz-mgmt-search .search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+}
+
+.lz-mgmt-search .form-input {
+  padding-left: 36px;
+  width: 100%;
+}
+
+.lz-form-card {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 32px;
+}
+
+.lz-form-card h3 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.form-group {
+  margin-bottom: 8px;
+}
+
+.form-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.form-input, .form-select {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.form-input:focus, .form-select:focus {
+  border-color: var(--primary);
+}
+
+.form-input.sm {
+  height: 30px;
+  font-size: 13px;
+  padding: 0 8px;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.btn-success {
+  background: var(--success);
+  color: white;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover {
+  background: var(--surface);
+  color: var(--text);
 }

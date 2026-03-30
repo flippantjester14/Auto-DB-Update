@@ -10,6 +10,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from pydantic import BaseModel
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -23,6 +25,7 @@ from models import (
     DownloadStatus,
     DuplicateCheckResponse,
     LandingZoneInfo,
+    LocationInfo,
     NetworkInfo,
     PipelineResult,
     ResolvePreviewResponse,
@@ -457,6 +460,126 @@ async def get_network_landing_zones(
         return [LandingZoneInfo(**dict(r)) for r in rows]
     finally:
         conn.close()
+
+
+class LandingZoneCreate(BaseModel):
+    name: str
+    latitude: float
+    longitude: float
+    location_id: int
+
+class LandingZoneUpdate(BaseModel):
+    name: str
+    latitude: float
+    longitude: float
+
+@app.post("/networks/{network_id}/landing-zones")
+async def create_landing_zone(
+    network_id: int,
+    lz_data: LandingZoneCreate,
+    settings: Settings = Depends(get_settings),
+    user: dict = Depends(get_current_user),
+):
+    """Create a new landing zone in flights.db."""
+    import sqlite3 as _sqlite3
+    flights_db = settings.instance_dir / "flights.db"
+    
+    conn = _sqlite3.connect(str(flights_db))
+    try:
+        cursor = conn.cursor()
+        # landing_zones table does NOT have network_id. 
+        # It's associated via location_id.
+        cursor.execute("""
+            INSERT INTO landing_zones (location_id, name, latitude, longitude, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (lz_data.location_id, lz_data.name, lz_data.latitude, lz_data.longitude, True))
+        conn.commit()
+        return {"lz_id": cursor.lastrowid}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@app.get("/locations", response_model=list[LocationInfo])
+async def list_locations(
+    settings: Settings = Depends(get_settings),
+    user: dict = Depends(get_current_user),
+):
+    """List all locations from flights.db."""
+    import sqlite3 as _sqlite3
+    flights_db = settings.instance_dir / "flights.db"
+    
+    conn = _sqlite3.connect(str(flights_db))
+    conn.row_factory = _sqlite3.Row
+    try:
+        rows = conn.execute("SELECT id, name, code, COALESCE(landing_zone_count, 0) as landing_zone_count FROM locations ORDER BY name").fetchall()
+        return [LocationInfo(**dict(r)) for r in rows]
+    finally:
+        conn.close()
+
+@app.put("/landing-zones/{lz_id}")
+async def update_landing_zone(
+    lz_id: int,
+    lz_data: LandingZoneUpdate,
+    settings: Settings = Depends(get_settings),
+    user: dict = Depends(get_current_user),
+):
+    """Update an existing landing zone in flights.db."""
+    import sqlite3 as _sqlite3
+    flights_db = settings.instance_dir / "flights.db"
+    
+    conn = _sqlite3.connect(str(flights_db))
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE landing_zones 
+            SET name = ?, latitude = ?, longitude = ?
+            WHERE id = ?
+        """, (lz_data.name, lz_data.latitude, lz_data.longitude, lz_id))
+        
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Landing zone not found")
+            
+        conn.commit()
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.delete("/landing-zones/{lz_id}")
+async def delete_landing_zone(
+    lz_id: int,
+    settings: Settings = Depends(get_settings),
+    user: dict = Depends(get_current_user),
+):
+    """Delete a landing zone from flights.db by its ID."""
+    import sqlite3 as _sqlite3
+    flights_db = settings.instance_dir / "flights.db"
+
+    conn = _sqlite3.connect(str(flights_db))
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM landing_zones WHERE id = ?", (lz_id,))
+
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Landing zone not found")
+
+        conn.commit()
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
 
 
 @app.post("/waypoints/parse", response_model=WaypointFileResponse)

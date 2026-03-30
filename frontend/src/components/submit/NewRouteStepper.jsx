@@ -9,7 +9,7 @@ import { useToast } from '../shared/Toast';
 import StepperProgress from './StepperProgress';
 import { validateDriveLink, validateDirections, validateFilename } from './submitValidation';
 
-const STEPS = ['Network', 'Upload File', 'Validate & Match', 'Drive Links', 'Review & Submit'];
+const STEPS = ['Network', 'Upload & Match', 'Drive Links', 'Review & Submit'];
 
 const PROXIMITY_THRESHOLD = 0.000001;
 
@@ -42,6 +42,16 @@ function matchLandingZone(lzList, lat, lng, mode = 'proximity') {
         }
     }
     return null;
+}
+
+/** Compute compass bearing (0-359°) from point A → point B */
+function bearing(lat1, lng1, lat2, lng2) {
+    const toRad = d => d * Math.PI / 180;
+    const dLng = toRad(lng2 - lng1);
+    const phi1 = toRad(lat1), phi2 = toRad(lat2);
+    const y = Math.sin(dLng) * Math.cos(phi2);
+    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLng);
+    return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360);
 }
 
 export default function NewRouteStepper() {
@@ -93,18 +103,25 @@ export default function NewRouteStepper() {
         return v === '' || v === null || v === undefined ? 0 : Number(v);
     };
 
-    // ── Step 2: parse file ──────────────────────────────────────────────
+    // ── Step 2: parse file & match ──────────────────────────────────────
     const handleFileSelect = async (file) => {
         setWaypointFile(file);
         setParseResult(null);
         setParseError(null);
+        setSourceMatch(null);
+        setDestMatch(null);
         if (!file) return;
 
         setParsing(true);
         try {
             const result = await api.parseWaypoints(file);
             setParseResult(result);
-            update('mission_filename', result.mission_filename);
+            update('mission_filename', file.name);
+            
+            // Trigger matching immediately if we have a network
+            if (selectedNetwork) {
+                await performMatching(result, selectedNetwork.id);
+            }
         } catch (e) {
             setParseError(e.message);
         } finally {
@@ -112,61 +129,94 @@ export default function NewRouteStepper() {
         }
     };
 
-    // Extract key waypoints from parsed file
-    const getKeyWaypoints = () => {
-        if (!parseResult) return { takeoff: null, vtolLand: null };
-        const wps = parseResult.waypoints;
-        const takeoff = wps.find(w => [22, 84].includes(w.command)); // TAKEOFF or VTOL_TAKEOFF
-        const vtolLand = wps.find(w => [21, 85].includes(w.command)); // LAND or VTOL_LAND
-        return { takeoff, vtolLand };
+    const performMatching = async (parseRes, networkId) => {
+        setLoadingLZs(true);
+        try {
+            const lzs = await api.getNetworkLandingZones(networkId);
+            setLandingZones(lzs);
+            const { takeoff, vtolLand, navWaypoints } = getKeyWaypoints(parseRes);
+
+            if (takeoff) {
+                const srcLat = takeoff.latitude;
+                const srcLng = takeoff.longitude;
+                const match = matchLandingZone(lzs, srcLat, srcLng, 'proximity');
+                setSourceMatch(match || false);
+                setSourceUnknown(!match);
+                update('source_latitude', srcLat);
+                update('source_longitude', srcLng);
+                if (match) {
+                    update('source_location_name', match.location_name);
+                    update('source_takeoff_zone_name', match.name);
+                }
+
+                // Auto-calculate takeoff direction
+                const firstNav = navWaypoints[0];
+                if (firstNav) {
+                    update('takeoff_direction', bearing(srcLat, srcLng, firstNav.latitude, firstNav.longitude));
+                } else if (vtolLand) {
+                    update('takeoff_direction', bearing(srcLat, srcLng, vtolLand.latitude, vtolLand.longitude));
+                }
+            }
+
+            if (vtolLand) {
+                const dstLat = vtolLand.latitude;
+                const dstLng = vtolLand.longitude;
+                const match = matchLandingZone(lzs, dstLat, dstLng, 'exact');
+                setDestMatch(match || false);
+                setDestUnknown(!match);
+                update('destination_latitude', dstLat);
+                update('destination_longitude', dstLng);
+                if (match) {
+                    update('destination_location_name', match.location_name);
+                    update('destination_landing_zone_name', match.name);
+                }
+
+                // Auto-calculate approach direction
+                const lastNav = navWaypoints[navWaypoints.length - 1];
+                if (lastNav) {
+                    update('approach_direction', bearing(lastNav.latitude, lastNav.longitude, dstLat, dstLng));
+                } else if (takeoff) {
+                    update('approach_direction', bearing(takeoff.latitude, takeoff.longitude, dstLat, dstLng));
+                }
+            }
+        } catch (e) {
+            addToast(`Matching failed: ${e.message}`);
+        } finally {
+            setLoadingLZs(false);
+        }
     };
 
-    // ── Step 3: load landing zones and match ───────────────────────────
+    // Extract key waypoints from parsed file
+    const getKeyWaypoints = (pRes = parseResult) => {
+        if (!pRes) return { takeoff: null, vtolLand: null, navWaypoints: [] };
+        const wps = pRes.waypoints;
+
+        // Source: index 0 (home position) has the real takeoff ground coords.
+        // The TAKEOFF command (22/84) stores 0,0 by design in ArduPilot.
+        const takeoff = wps.find(w => w.index === 0 && w.latitude !== 0 && w.longitude !== 0)
+            || wps.find(w => [22, 84].includes(w.command) && w.latitude !== 0 && w.longitude !== 0);
+
+        // Destination: first VTOL_LAND (85) or LAND (21) with real coords
+        const vtolLand = wps.find(w => [85, 21].includes(w.command) && w.latitude !== 0 && w.longitude !== 0)
+            || [...wps].reverse().find(w => w.latitude !== 0 && w.longitude !== 0 && w.index !== 0);
+
+        // Nav waypoints (excludes home and action commands) for direction calculation
+        const navWaypoints = wps.filter(w => w.index !== 0 && w.latitude !== 0 && w.longitude !== 0
+            && ![22, 84, 21, 85].includes(w.command));
+
+        return { takeoff, vtolLand, navWaypoints };
+    };
+
+    // Re-trigger matching if network changes while file is already uploaded
     useEffect(() => {
-        if (step === 3 && selectedNetwork) {
-            setLoadingLZs(true);
-            api.getNetworkLandingZones(selectedNetwork.id)
-                .then(lzs => {
-                    setLandingZones(lzs);
-                    const { takeoff, vtolLand } = getKeyWaypoints();
-
-                    if (takeoff) {
-                        const srcLat = takeoff.latitude;
-                        const srcLng = takeoff.longitude;
-                        const match = matchLandingZone(lzs, srcLat, srcLng, 'proximity');
-                        setSourceMatch(match || false);
-                        setSourceUnknown(!match);
-                        // Pre-fill data
-                        update('source_latitude', srcLat);
-                        update('source_longitude', srcLng);
-                        if (match) {
-                            update('source_location_name', match.location_name);
-                            update('source_takeoff_zone_name', match.name);
-                        }
-                    }
-
-                    if (vtolLand) {
-                        const dstLat = vtolLand.latitude;
-                        const dstLng = vtolLand.longitude;
-                        const match = matchLandingZone(lzs, dstLat, dstLng, 'exact');
-                        setDestMatch(match || false);
-                        setDestUnknown(!match);
-                        update('destination_latitude', dstLat);
-                        update('destination_longitude', dstLng);
-                        if (match) {
-                            update('destination_location_name', match.location_name);
-                            update('destination_landing_zone_name', match.name);
-                        }
-                    }
-                })
-                .catch(e => addToast(`Could not load landing zones: ${e.message}`))
-                .finally(() => setLoadingLZs(false));
+        if (waypointFile && parseResult && selectedNetwork) {
+            performMatching(parseResult, selectedNetwork.id);
         }
-    }, [step, selectedNetwork]);
+    }, [selectedNetwork]);
 
-    // ── Step 5: server validation ──────────────────────────────────────
+    // ── Step 4: server validation ──────────────────────────────────────
     useEffect(() => {
-        if (step === 5) {
+        if (step === 4) {
             (async () => {
                 setValidating(true);
                 setServerValidation(null);
@@ -212,22 +262,22 @@ export default function NewRouteStepper() {
             case 1:
                 if (!data.network_name) errors.push('Please select a network');
                 break;
-            case 2:
+            case 2: {
                 if (!parseResult) errors.push('Please upload and parse a .waypoints file');
                 if (parseError) errors.push(`Parse failed: ${parseError}`);
-                break;
-            case 3: {
-                if (!data.source_location_name.trim()) errors.push('Source location name is required (not matched — please enter manually)');
-                if (!data.source_takeoff_zone_name.trim()) errors.push('Source takeoff zone name is required');
-                if (!data.destination_location_name.trim()) errors.push('Destination location name is required (not matched — please enter manually)');
-                if (!data.destination_landing_zone_name.trim()) errors.push('Destination landing zone name is required');
-                if (data.takeoff_direction === '' || data.takeoff_direction === null) errors.push('Takeoff direction is required');
-                if (data.approach_direction === '' || data.approach_direction === null) errors.push('Approach direction is required');
-                const fn = validateFilename(data.mission_filename);
-                errors.push(...fn.errors);
+                if (parseResult) {
+                    if (!data.source_location_name.trim()) errors.push('Source location name is required (not matched — please enter manually)');
+                    if (!data.source_takeoff_zone_name.trim()) errors.push('Source takeoff zone name is required');
+                    if (!data.destination_location_name.trim()) errors.push('Destination location name is required (not matched — please enter manually)');
+                    if (!data.destination_landing_zone_name.trim()) errors.push('Destination landing zone name is required');
+                    if (data.takeoff_direction === '' || data.takeoff_direction === null) errors.push('Takeoff direction is required');
+                    if (data.approach_direction === '' || data.approach_direction === null) errors.push('Approach direction is required');
+                    const fn = validateFilename(data.mission_filename);
+                    errors.push(...fn.errors);
+                }
                 break;
             }
-            case 4: {
+            case 3: {
                 const m = validateDriveLink(data.mission_drive_link, 'Mission file', true);
                 errors.push(...m.errors);
                 const e = validateDriveLink(data.elevation_image_drive_link, 'Elevation image', false);
@@ -322,13 +372,14 @@ export default function NewRouteStepper() {
                     </div>
                 )}
 
-                {/* ── STEP 2: Upload File ── */}
+                {/* ── STEP 2: Upload & Match ── */}
                 {step === 2 && (
-                    <div className="form-step" id="step-upload">
-                        <h3 className="form-step-title">Upload Waypoint File</h3>
+                    <div className="form-step" id="step-upload-match">
+                        <h3 className="form-step-title">Upload &amp; Match</h3>
                         <p style={{ color: 'var(--text-secondary)', marginBottom: 16 }}>
-                            Upload the <code>.waypoints</code> mission file. Source and destination coordinates will be extracted automatically.
+                            Upload the <code>.waypoints</code> mission file. Source and destination coordinates will be extracted and matched against the database.
                         </p>
+                        
                         <div
                             className={`file-drop-zone ${waypointFile ? 'file-drop-zone--active' : ''}`}
                             onClick={() => fileInputRef.current?.click()}
@@ -345,15 +396,13 @@ export default function NewRouteStepper() {
                             {parsing ? (
                                 <div className="flex flex-col items-center gap-8">
                                     <Loader2 size={32} className="spin" style={{ color: 'var(--primary)' }} />
-                                    <span>Parsing file...</span>
+                                    <span>Parsing &amp; Matching...</span>
                                 </div>
                             ) : parseResult ? (
                                 <div className="flex flex-col items-center gap-8">
                                     <FileCheck size={32} style={{ color: 'var(--success)' }} />
-                                    <strong>{parseResult.mission_filename}</strong>
+                                    <strong>{data.mission_filename}</strong>
                                     <span style={{ color: 'var(--text-secondary)' }}>{parseResult.total_waypoints} waypoints parsed</span>
-                                    {takeoff && <div className="parse-coord-row"><span>Takeoff</span> <code>{takeoff.latitude}, {takeoff.longitude}</code></div>}
-                                    {vtolLand && <div className="parse-coord-row"><span>VTOL Land</span> <code>{vtolLand.latitude}, {vtolLand.longitude}</code></div>}
                                     <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); setParseResult(null); setWaypointFile(null); }}>
                                         Change file
                                     </button>
@@ -372,122 +421,114 @@ export default function NewRouteStepper() {
                                 </div>
                             )}
                         </div>
-                    </div>
-                )}
 
-                {/* ── STEP 3: Validate & Match ── */}
-                {step === 3 && (
-                    <div className="form-step" id="step-validate">
-                        <h3 className="form-step-title">Validate &amp; Match</h3>
-                        {loadingLZs ? (
-                            <div className="loading-state"><Loader2 size={16} className="spin" /> Matching coordinates against database...</div>
-                        ) : (
-                            <>
-                                {/* Source */}
-                                <div className="match-section">
-                                    <div className="match-section-title">
-                                        Source (Takeoff) — proximity match within {PROXIMITY_THRESHOLD}°
-                                    </div>
-                                    <Matchbadge matched={sourceMatch} label="No landing zone found near source coordinates" />
-                                    <div className="form-grid" style={{ marginTop: 12 }}>
-                                        <div className="form-group">
-                                            <label className="form-label">Location Name {sourceUnknown && <span className="unrecognized-tag">Unrecognized</span>}</label>
-                                            <input className="form-input" id="input-source-location"
-                                                value={data.source_location_name}
-                                                onChange={e => update('source_location_name', e.target.value)}
-                                                placeholder="Enter location name" />
-                                        </div>
-                                        <div className="form-group">
-                                            <label className="form-label">Takeoff Zone Name</label>
-                                            <input className="form-input" id="input-source-tz"
-                                                value={data.source_takeoff_zone_name}
-                                                onChange={e => update('source_takeoff_zone_name', e.target.value)}
-                                                placeholder="Enter takeoff zone name" />
-                                        </div>
-                                        <div className="form-group">
-                                            <label className="form-label">Latitude</label>
-                                            <input className="form-input" type="number" step="any" id="input-source-lat"
-                                                value={data.source_latitude}
-                                                onChange={e => update('source_latitude', e.target.value)} />
-                                        </div>
-                                        <div className="form-group">
-                                            <label className="form-label">Longitude</label>
-                                            <input className="form-input" type="number" step="any" id="input-source-lng"
-                                                value={data.source_longitude}
-                                                onChange={e => update('source_longitude', e.target.value)} />
-                                        </div>
-                                    </div>
-                                </div>
+                        {parseResult && (
+                            <div style={{ marginTop: 24 }}>
+                                {loadingLZs ? (
+                                    <div className="loading-state"><Loader2 size={16} className="spin" /> Matching coordinates...</div>
+                                ) : (
+                                    <>
+                                        <div className="sections-row" style={{ marginTop: 20 }}>
+                                            {/* Source */}
+                                            <div className="match-section">
+                                                <div className="match-section-title">
+                                                    Source (Takeoff)
+                                                </div>
+                                                <Matchbadge matched={sourceMatch} label="No lz match" />
+                                                <div className="form-grid" style={{ marginTop: 12 }}>
+                                                    <div className="form-group">
+                                                        <label className="form-label">Location {sourceUnknown && <span className="unrecognized-tag">!</span>}</label>
+                                                        <input className="form-input" id="input-source-location"
+                                                            value={data.source_location_name}
+                                                            onChange={e => update('source_location_name', e.target.value)}
+                                                            placeholder="Location" />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label className="form-label">Takeoff Zone</label>
+                                                        <input className="form-input" id="input-source-tz"
+                                                            value={data.source_takeoff_zone_name}
+                                                            onChange={e => update('source_takeoff_zone_name', e.target.value)}
+                                                            placeholder="Zone name" />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label className="form-label">Lat</label>
+                                                        <input className="form-input text-sm" type="number" step="any" readOnly
+                                                            value={data.source_latitude} style={{ background: '#f8fafc' }} />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label className="form-label">Lng</label>
+                                                        <input className="form-input text-sm" type="number" step="any" readOnly
+                                                            value={data.source_longitude} style={{ background: '#f8fafc' }} />
+                                                    </div>
+                                                </div>
+                                            </div>
 
-                                {/* Destination */}
-                                <div className="match-section" style={{ marginTop: 24 }}>
-                                    <div className="match-section-title">
-                                        Destination (VTOL Land) — exact match required
-                                    </div>
-                                    <Matchbadge matched={destMatch} label="No exact landing zone match for destination coordinates" />
-                                    <div className="form-grid" style={{ marginTop: 12 }}>
-                                        <div className="form-group">
-                                            <label className="form-label">Location Name {destUnknown && <span className="unrecognized-tag">Unrecognized</span>}</label>
-                                            <input className="form-input" id="input-dest-location"
-                                                value={data.destination_location_name}
-                                                onChange={e => update('destination_location_name', e.target.value)}
-                                                placeholder="Enter location name" />
+                                            {/* Destination */}
+                                            <div className="match-section">
+                                                <div className="match-section-title">
+                                                    Destination (VTOL Land)
+                                                </div>
+                                                <Matchbadge matched={destMatch} label="No exact match" />
+                                                <div className="form-grid" style={{ marginTop: 12 }}>
+                                                    <div className="form-group">
+                                                        <label className="form-label">Location {destUnknown && <span className="unrecognized-tag">!</span>}</label>
+                                                        <input className="form-input" id="input-dest-location"
+                                                            value={data.destination_location_name}
+                                                            onChange={e => update('destination_location_name', e.target.value)}
+                                                            placeholder="Location" />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label className="form-label">Landing Zone</label>
+                                                        <input className="form-input" id="input-dest-lz"
+                                                            value={data.destination_landing_zone_name}
+                                                            onChange={e => update('destination_landing_zone_name', e.target.value)}
+                                                            placeholder="LZ name" />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label className="form-label">Lat</label>
+                                                        <input className="form-input text-sm" type="number" step="any" readOnly
+                                                            value={data.destination_latitude} style={{ background: '#f8fafc' }} />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label className="form-label">Lng</label>
+                                                        <input className="form-input text-sm" type="number" step="any" readOnly
+                                                            value={data.destination_longitude} style={{ background: '#f8fafc' }} />
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div className="form-group">
-                                            <label className="form-label">Landing Zone Name</label>
-                                            <input className="form-input" id="input-dest-lz"
-                                                value={data.destination_landing_zone_name}
-                                                onChange={e => update('destination_landing_zone_name', e.target.value)}
-                                                placeholder="Enter landing zone name" />
-                                        </div>
-                                        <div className="form-group">
-                                            <label className="form-label">Latitude</label>
-                                            <input className="form-input" type="number" step="any" id="input-dest-lat"
-                                                value={data.destination_latitude}
-                                                onChange={e => update('destination_latitude', e.target.value)} />
-                                        </div>
-                                        <div className="form-group">
-                                            <label className="form-label">Longitude</label>
-                                            <input className="form-input" type="number" step="any" id="input-dest-lng"
-                                                value={data.destination_longitude}
-                                                onChange={e => update('destination_longitude', e.target.value)} />
-                                        </div>
-                                    </div>
-                                </div>
 
-                                {/* Route Details */}
-                                <div className="match-section" style={{ marginTop: 24 }}>
-                                    <div className="match-section-title">Route Details</div>
-                                    <div className="form-grid" style={{ marginTop: 12 }}>
-                                        <div className="form-group">
-                                            <label className="form-label">Takeoff Direction (°)</label>
-                                            <input className="form-input" type="number" min="0" max="360" id="input-takeoff-dir"
-                                                value={data.takeoff_direction}
-                                                onChange={e => update('takeoff_direction', e.target.value)}
-                                                placeholder="e.g. 180" />
+                                        {/* Route Details */}
+                                        <div className="match-section" style={{ marginTop: 16 }}>
+                                            <div className="match-section-title">Route Parameters</div>
+                                            <div className="form-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+                                                <div className="form-group">
+                                                    <label className="form-label">Takeoff Dir (°)</label>
+                                                    <input className="form-input" type="number" min="0" max="360" id="input-takeoff-dir"
+                                                        value={data.takeoff_direction}
+                                                        onChange={e => update('takeoff_direction', e.target.value)} />
+                                                </div>
+                                                <div className="form-group">
+                                                    <label className="form-label">Approach Dir (°)</label>
+                                                    <input className="form-input" type="number" min="0" max="360" id="input-approach-dir"
+                                                        value={data.approach_direction}
+                                                        onChange={e => update('approach_direction', e.target.value)} />
+                                                </div>
+                                                <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                                                    <label className="form-label">Filename</label>
+                                                    <input className="form-input" readOnly value={data.mission_filename} style={{ background: '#f8fafc' }} />
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div className="form-group">
-                                            <label className="form-label">Approach Direction (°)</label>
-                                            <input className="form-input" type="number" min="0" max="360" id="input-approach-dir"
-                                                value={data.approach_direction}
-                                                onChange={e => update('approach_direction', e.target.value)}
-                                                placeholder="e.g. 90" />
-                                        </div>
-                                        <div className="form-group form-group--full">
-                                            <label className="form-label">Mission Filename</label>
-                                            <input className="form-input" id="input-mission-filename"
-                                                value={data.mission_filename}
-                                                onChange={e => update('mission_filename', e.target.value)} />
-                                        </div>
-                                    </div>
-                                </div>
-                            </>
+                                    </>
+                                )}
+                            </div>
                         )}
                     </div>
                 )}
 
-                {/* ── STEP 4: Drive Links ── */}
-                {step === 4 && (
+                {/* ── STEP 3: Drive Links ── */}
+                {step === 3 && (
                     <div className="form-step" id="step-drive-links">
                         <h3 className="form-step-title">Google Drive Links</h3>
                         <div className="form-group">
@@ -508,8 +549,8 @@ export default function NewRouteStepper() {
                     </div>
                 )}
 
-                {/* ── STEP 5: Review & Submit ── */}
-                {step === 5 && (
+                {/* ── STEP 4: Review & Submit ── */}
+                {step === 4 && (
                     <div className="form-step" id="step-summary">
                         <h3 className="form-step-title">Review &amp; Confirm</h3>
 
@@ -592,12 +633,12 @@ export default function NewRouteStepper() {
                     </button>
                 )}
                 <div style={{ flex: 1 }} />
-                {step < 5 && (
-                    <button className="btn btn-primary" id="btn-next" onClick={handleNext} disabled={step === 2 && parsing}>
-                        {step === 2 && parsing ? <><Loader2 size={14} className="spin" /> Parsing...</> : <>Next <ArrowRight size={14} /></>}
+                {step < 4 && (
+                    <button className="btn btn-primary" id="btn-next" onClick={handleNext} disabled={step === 2 && (parsing || loadingLZs)}>
+                        {step === 2 && (parsing || loadingLZs) ? <><Loader2 size={14} className="spin" /> Processing...</> : <>Next <ArrowRight size={14} /></>}
                     </button>
                 )}
-                {step === 5 && (
+                {step === 4 && (
                     <button className="btn btn-primary" id="btn-submit" onClick={handleSubmit} disabled={!canSubmit}>
                         {submitting ? <><Loader2 size={14} className="spin" /> Submitting...</> : <><Send size={14} /> Submit Route</>}
                     </button>

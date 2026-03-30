@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, BarChart3, Map, PlusCircle } from 'lucide-react';
+import { LayoutDashboard, BarChart3, Map, MapPin, PlusCircle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 const NAV_ITEMS = [
@@ -19,6 +19,7 @@ const NAV_ITEMS = [
         items: [
             { label: 'DB Stats', path: '/stats', icon: BarChart3 },
             { label: 'WP Viewer', path: '/viewer', icon: Map },
+            { label: 'LZ Management', path: '/lz-management', icon: MapPin },
         ],
     },
 ];

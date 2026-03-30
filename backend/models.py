@@ -184,6 +184,13 @@ class NetworkInfo(BaseModel):
     route_count: int = 0
 
 
+class LocationInfo(BaseModel):
+    id: int
+    name: str
+    code: Optional[str] = None
+    landing_zone_count: Optional[int] = 0
+
+
 class LandingZoneInfo(BaseModel):
     id: int
     name: str

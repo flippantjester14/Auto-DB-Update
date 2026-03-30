@@ -128,6 +128,19 @@ export const api = {
     getNetworkRoutes: (networkId) => authFetch(`/networks/${networkId}/routes`),
     getRoute: (routeId) => authFetch(`/routes/${routeId}`),
     getNetworkLandingZones: (networkId) => authFetch(`/networks/${networkId}/landing-zones`),
+    getLocations: () => authFetch('/locations'),
+    createLandingZone: (networkId, payload) => authFetch(`/networks/${networkId}/landing-zones`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    }),
+    updateLandingZone: (lzId, payload) => authFetch(`/landing-zones/${lzId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+    }),
+
+    deleteLandingZone: (lzId) => authFetch(`/landing-zones/${lzId}`, {
+        method: 'DELETE',
+    }),
 
     // ── Waypoint File Parsing ────────────────────────────────────────────
     parseWaypoints: async (file) => {
