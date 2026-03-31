@@ -249,7 +249,7 @@ export default function UpdateRouteStepper() {
     const handleBack = () => { setStepErrors([]); setStep(s => s - 1); };
 
     useEffect(() => {
-        if (step === 5) {
+        if (step === 4) {
             (async () => {
                 setValidating(true);
                 try {

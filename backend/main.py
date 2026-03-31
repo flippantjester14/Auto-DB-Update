@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -17,10 +17,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import Settings, get_settings
 from auth import get_current_user, require_role
+from audit_store import AuditStore
 from drive_downloader import download_submission_files
 from excel_updater import ExcelUpdater
 from models import (
     ApprovalRequest,
+    AuditActionType,
+    AuditRecord,
     DownloadResult,
     DownloadStatus,
     DuplicateCheckResponse,
@@ -37,11 +40,13 @@ from models import (
     SubmissionStatus,
     ValidationResponse,
     WaypointFileResponse,
+    WorkflowState,
 )
 from pipeline import run_approval_pipeline
 from submission_store import SubmissionStore
 from validation import validate_submission, validate_all_drive_links
 from waypoint_parser import parse_waypoints_file
+import email_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,9 +74,21 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def add_no_cache_headers(request, call_next):
+    """Disable caching for all GET requests to ensure fresh data."""
+    response = await call_next(request)
+    if request.method == "GET":
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 # ── Dependencies ─────────────────────────────────────────────────────────────
 
 _store: Optional[SubmissionStore] = None
+_audit_store: Optional[AuditStore] = None
 
 
 def get_store() -> SubmissionStore:
@@ -82,14 +99,29 @@ def get_store() -> SubmissionStore:
     return _store
 
 
+def get_audit_store() -> AuditStore:
+    global _audit_store
+    if _audit_store is None:
+        settings = get_settings()
+        _audit_store = AuditStore(settings.AUDIT_DB_PATH)
+    return _audit_store
+
+
 def init_app() -> None:
     """Initialize the app on startup."""
     settings = get_settings()
-    # Ensure submission store is ready
+    # Ensure stores are ready
     get_store()
+    get_audit_store()
+    
+    # SMTP Validation (non-blocking)
+    if not settings.SMTP_PASSWORD or settings.SMTP_PASSWORD == "ROTATE_ME_PUT_NEW_SENDGRID_KEY_HERE":
+        logger.warning("SMTP_PASSWORD not configured. Emails will be logged but not sent.")
+    
     logger.info("RedWing DB Automation backend started")
     logger.info(f"  Repo path: {settings.repo_path}")
     logger.info(f"  Excel: {settings.excel_path}")
+    logger.info(f"  Frontend: {settings.FRONTEND_URL}")
 
 
 @app.on_event("startup")
@@ -138,7 +170,27 @@ async def webhook_new_submission(
         finally:
             updater.close()
 
-    submission_id = store.add_submission(payload, status=status, source="webhook")
+    submission_id = store.add_submission(
+        payload, 
+        status=status, 
+        source="webhook"
+    )
+    
+    # Phase 3: Audit & Notification
+    audit = get_audit_store()
+    audit.add_record(
+        submission_id, 
+        AuditActionType.SUBMISSION_CREATED,
+        metadata={"source": "webhook"}
+    )
+    
+    email_service.send_submission_notification(
+        submission_id, 
+        payload, 
+        submitter_name="Google Form", 
+        submitter_role="webhook"
+    )
+
     logger.info(f"New submission received: {submission_id} (Status: {status})")
     return {
         "submission_id": submission_id,
@@ -182,8 +234,32 @@ async def create_submission(
             updater.close()
 
     submission_id = store.add_submission(
-        payload, status=status, user_uid=user['uid'], source="ui"
+        payload, 
+        status=status, 
+        user_uid=user['uid'], 
+        source="ui",
+        submitted_by_name=user.get('display_name', user['email']),
+        submitted_by_role=user.get('role', 'operator')
     )
+    
+    # Phase 3: Audit & Notification
+    audit = get_audit_store()
+    audit.add_record(
+        submission_id, 
+        AuditActionType.SUBMISSION_CREATED,
+        performed_by_uid=user['uid'],
+        performed_by_name=user.get('display_name', user['email']),
+        performed_by_role=user.get('role', 'operator'),
+        metadata={"source": "ui"}
+    )
+    
+    email_service.send_submission_notification(
+        submission_id, 
+        payload, 
+        submitter_name=user.get('display_name', user['email']), 
+        submitter_role=user.get('role', 'operator')
+    )
+
     logger.info(f"UI submission created: {submission_id} by {user['email']}")
     return {
         "submission_id": submission_id,
@@ -620,10 +696,19 @@ async def get_submission(
     submission_id: str,
     store: SubmissionStore = Depends(get_store),
     user: dict = Depends(get_current_user)):
-    """Get full details of one submission."""
+    """Get full details of one submission. Mark as viewed if reviewer/admin."""
     sub = store.get_submission(submission_id)
     if sub is None:
         raise HTTPException(status_code=404, detail="Submission not found")
+    
+    # Transparency: Mark as viewed if first time seen by someone other than submitter (or a reviewer/admin)
+    current_role = user.get('role', 'operator')
+    if current_role in ('reviewer', 'sde', 'admin') and not sub.viewed_by_name:
+        user_name = user.get('display_name', user['email'])
+        if store.mark_viewed(submission_id, user_name):
+            # Refresh object for response
+            sub = store.get_submission(submission_id)
+            
     return sub
 
 
@@ -632,14 +717,59 @@ async def update_review_state(
     submission_id: str,
     request: ReviewStateUpdateRequest,
     store: SubmissionStore = Depends(get_store),
+    audit_store: AuditStore = Depends(get_audit_store),
     user: dict = Depends(require_role('operator'))):
     """Update verification flags for a submission."""
+    sub = store.get_submission(submission_id)
+    if not sub:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    # Workflow State Logic
+    new_state = None
+    action_type = None
+    
+    if request.waypoint_verified:
+        # Gate 1: Waypoints verified
+        new_state = WorkflowState.WAYPOINT_VERIFIED
+        action_type = AuditActionType.GATE1_PASSED
+    elif request.id_resolution_reviewed:
+        # Gate 2: ID Resolution reviewed
+        if sub.workflow_state != WorkflowState.WAYPOINT_VERIFIED:
+            raise HTTPException(status_code=400, detail="Must verify waypoints before ID resolution")
+        new_state = WorkflowState.ID_RESOLUTION_CONFIRMED
+        action_type = AuditActionType.GATE2_CONFIRMED
+
     affected = store.update_review_state(
         submission_id,
         waypoint_verified=request.waypoint_verified,
         id_resolution_reviewed=request.id_resolution_reviewed,
-        user_uid=user['uid']
+        user_uid=user['uid'],
+        reviewer_name=user.get('display_name', user['email'])
     )
+    
+    if affected and new_state and action_type:
+        store.update_workflow_state(
+            submission_id, 
+            new_state, 
+            user_uid=user['uid'],
+            performer_name=user.get('display_name', user['email'])
+        )
+        audit_store.add_record(
+            submission_id, 
+            action_type,
+            performed_by_uid=user['uid'],
+            performed_by_name=user.get('display_name', user['email']),
+            performed_by_role=user.get('role', 'operator')
+        )
+        
+        # Trigger email if Gate 1 passed
+        if action_type == AuditActionType.GATE1_PASSED:
+            email_service.send_verification_complete(
+                submission_id, sub.payload,
+                verifier_name=user.get('display_name', user['email']),
+                verifier_role=user.get('role', 'operator')
+            )
+
     if not affected:
         raise HTTPException(status_code=404, detail="Submission not found")
     return {"status": "ok"}
@@ -650,6 +780,7 @@ async def update_submission_status(
     submission_id: str,
     body: StatusUpdateRequest,
     store: SubmissionStore = Depends(get_store),
+    audit_store: AuditStore = Depends(get_audit_store),
     user: dict = Depends(require_role('operator'))):
     """Update submission status (e.g., reject)."""
     sub = store.get_submission(submission_id)
@@ -663,6 +794,30 @@ async def update_submission_status(
         )
 
     store.update_status(submission_id, body.status, body.reason, user_uid=user['uid'])
+    
+    # Phase 3: Workflow State & Audit
+    if body.status == SubmissionStatus.REJECTED:
+        store.update_workflow_state(
+            submission_id, 
+            WorkflowState.REJECTED, 
+            user_uid=user['uid'],
+            rejection_reason=body.reason
+        )
+        audit_store.add_record(
+            submission_id,
+            AuditActionType.REJECTED,
+            performed_by_uid=user['uid'],
+            performed_by_name=user.get('display_name', user['email']),
+            performed_by_role=user.get('role', 'operator'),
+            metadata={"reason": body.reason}
+        )
+        email_service.send_rejection(
+            submission_id, sub.payload,
+            rejector_name=user.get('display_name', user['email']),
+            rejector_role=user.get('role', 'operator'),
+            reason=body.reason or "No reason provided"
+        )
+
     return {"submission_id": submission_id, "status": body.status.value}
 
 
@@ -791,6 +946,7 @@ async def approve_submission(
     submission_id: str,
     body: ApprovalRequest,
     store: SubmissionStore = Depends(get_store),
+    audit_store: AuditStore = Depends(get_audit_store),
     settings: Settings = Depends(get_settings),
     user: dict = Depends(require_role('operator'))):
     """Run the full approval pipeline with confirmation gate."""
@@ -804,37 +960,56 @@ async def approve_submission(
     if sub.status == SubmissionStatus.REJECTED:
         raise HTTPException(status_code=400, detail="Submission was rejected")
 
-    # Run pre-check for confirmations
-    if not settings.excel_path.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"Excel file not found: {settings.excel_path}",
-        )
-
-    updater = ExcelUpdater(settings.excel_path)
+    # Phase 3: Pipeline Lock
     try:
-        updater.open()
-        preview = updater.resolve_preview(sub.payload)
-    finally:
-        updater.close()
+        store.acquire_pipeline_lock(user['uid'])
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
-    # Validate confirmations
-    from pipeline import validate_confirmations
-
-    validation_error = validate_confirmations(preview, body.confirmed_new_entities)
-    if validation_error:
-        raise HTTPException(status_code=403, detail=validation_error)
+    # Phase 3: Transition to PIPELINE_RUNNING
+    store.update_workflow_state(
+        submission_id, 
+        WorkflowState.PIPELINE_RUNNING, 
+        user_uid=user['uid'],
+        performer_name=user.get('display_name', user['email'])
+    )
+    audit_store.add_record(
+        submission_id,
+        AuditActionType.APPROVED,
+        performed_by_uid=user['uid'],
+        performed_by_name=user.get('display_name', user['email']),
+        performed_by_role=user.get('role', 'operator')
+    )
 
     # Run the full pipeline
-    result = run_approval_pipeline(submission_id, body, store, settings)
+    result = run_approval_pipeline(
+        submission_id, 
+        body, 
+        store, 
+        settings,
+        user_uid=user['uid'],
+        user_name=user.get('display_name', user['email']),
+        user_role=user.get('role', 'operator')
+    )
 
     if not result.success:
+        # Pipeline logic in pipeline.py handles releasing lock and setting status
         raise HTTPException(
             status_code=500,
             detail=f"Pipeline failed at step {result.error_step}: {result.error_detail}",
         )
 
     return result
+
+
+@app.get("/submissions/{submission_id}/audit", response_model=List[AuditRecord])
+async def get_submission_audit(
+    submission_id: str,
+    audit_store: AuditStore = Depends(get_audit_store),
+    user: dict = Depends(get_current_user)):
+    """Get the audit history for a specific submission."""
+    records = audit_store.get_records(submission_id)
+    return records
 
 
 # ── STATS ────────────────────────────────────────────────────────────────────
@@ -958,37 +1133,28 @@ async def get_cesium_token(settings: Settings = Depends(get_settings), user: dic
 
 @app.get("/health")
 async def health(settings: Settings = Depends(get_settings)):
-    import sqlite3
     import httpx
-    status = {"status": "ok", "service": "redwing-db-automation", "components": {}}
+    
+    comp_status: dict[str, str] = {}
     
     # Check submissions DB
     try:
-        if Path(settings.SUBMISSIONS_DB_PATH).exists():
-            status["components"]["submissions_db"] = "ok"
-        else:
-            status["components"]["submissions_db"] = "missing"
+        comp_status["submissions_db"] = "ok" if Path(settings.SUBMISSIONS_DB_PATH).exists() else "missing"
     except Exception as e:
-        status["components"]["submissions_db"] = f"error: {str(e)}"
+        comp_status["submissions_db"] = f"error: {str(e)}"
         
-    # Check flights DB (if applicable)
+    # Check flights DB
     flights_db = settings.instance_dir / "flights.db"
     try:
-        if flights_db.exists():
-            status["components"]["flights_db"] = "ok"
-        else:
-            status["components"]["flights_db"] = "missing"
+        comp_status["flights_db"] = "ok" if flights_db.exists() else "missing"
     except Exception as e:
-        status["components"]["flights_db"] = f"error: {str(e)}"
+        comp_status["flights_db"] = f"error: {str(e)}"
         
     # Check Excel
     try:
-        if settings.excel_path.exists():
-            status["components"]["excel"] = "ok"
-        else:
-            status["components"]["excel"] = "missing"
+        comp_status["excel"] = "ok" if settings.excel_path.exists() else "missing"
     except Exception as e:
-        status["components"]["excel"] = f"error: {str(e)}"
+        comp_status["excel"] = f"error: {str(e)}"
         
     # Check Ngrok
     try:
@@ -997,12 +1163,16 @@ async def health(settings: Settings = Depends(get_settings)):
             if resp.status_code == 200:
                 tunnels = resp.json().get('tunnels', [])
                 if any(t.get('public_url') == f"https://{settings.NGROK_DOMAIN}" for t in tunnels):
-                    status["components"]["ngrok"] = "ok"
+                    comp_status["ngrok"] = "ok"
                 else:
-                    status["components"]["ngrok"] = "tunnel_missing_or_mismatch"
+                    comp_status["ngrok"] = "tunnel_missing_or_mismatch"
             else:
-                status["components"]["ngrok"] = "api_error"
-    except Exception as e:
-        status["components"]["ngrok"] = f"unreachable"
-        
-    return status
+                comp_status["ngrok"] = "api_error"
+    except Exception:
+        comp_status["ngrok"] = "unreachable"
+
+    return {
+        "status": "ok",
+        "service": "redwing-db-automation",
+        "components": comp_status
+    }

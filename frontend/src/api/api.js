@@ -25,7 +25,13 @@ const authFetch = async (url, options = {}) => {
         ...(token ? { Authorization: `Bearer ${token}` } : {})
     };
 
-    const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}${url}`, {
+    let finalUrl = `${import.meta.env.VITE_API_URL || '/api'}${url}`;
+    if (!options.method || options.method === 'GET') {
+        const separator = finalUrl.includes('?') ? '&' : '?';
+        finalUrl += `${separator}t=${Date.now()}`;
+    }
+
+    const response = await fetch(finalUrl, {
         ...options,
         headers
     });
@@ -141,6 +147,8 @@ export const api = {
     deleteLandingZone: (lzId) => authFetch(`/landing-zones/${lzId}`, {
         method: 'DELETE',
     }),
+
+    getAuditLog: (submissionId) => authFetch(`/submissions/${submissionId}/audit`),
 
     // ── Waypoint File Parsing ────────────────────────────────────────────
     parseWaypoints: async (file) => {

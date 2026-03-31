@@ -19,6 +19,37 @@ class SubmissionStatus(str, enum.Enum):
     DUPLICATE = "duplicate"
 
 
+class WorkflowState(str, enum.Enum):
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    FILES_DOWNLOADED = "FILES_DOWNLOADED"
+    WAYPOINT_VERIFIED = "WAYPOINT_VERIFIED"
+    ID_RESOLUTION_CONFIRMED = "ID_RESOLUTION_CONFIRMED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    RESUBMITTED = "RESUBMITTED"
+    PIPELINE_RUNNING = "PIPELINE_RUNNING"
+    PIPELINE_COMPLETE = "PIPELINE_COMPLETE"
+    PIPELINE_FAILED = "PIPELINE_FAILED"
+
+
+class AuditActionType(str, enum.Enum):
+    SUBMISSION_CREATED = "SUBMISSION_CREATED"
+    GATE1_PASSED = "GATE1_PASSED"
+    GATE1_FAILED = "GATE1_FAILED"
+    GATE2_CONFIRMED = "GATE2_CONFIRMED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    RESUBMITTED = "RESUBMITTED"
+    PIPELINE_STEP_COMPLETE = "PIPELINE_STEP_COMPLETE"
+    PIPELINE_STEP_FAILED = "PIPELINE_STEP_FAILED"
+    PIPELINE_COMPLETE = "PIPELINE_COMPLETE"
+    PIPELINE_FAILED = "PIPELINE_FAILED"
+    PIPELINE_STEP_RETRIED = "PIPELINE_STEP_RETRIED"
+    EMAIL_FAILED = "EMAIL_FAILED"
+    BRANCH_CREATED = "BRANCH_CREATED"
+
+
 class EntityAction(str, enum.Enum):
     EXISTING = "existing"
     NEW = "new"
@@ -67,6 +98,20 @@ class SubmissionResponse(BaseModel):
     waypoint_verified: bool = False
     id_resolution_reviewed: bool = False
     source: str = "webhook"
+    # Phase 3 fields
+    workflow_state: str = "SUBMITTED"
+    submitted_by_uid: Optional[str] = None
+    submitted_by_name: Optional[str] = None
+    submitted_by_role: Optional[str] = None
+    branch_name: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    reviewed_by_name: Optional[str] = None
+    verified_by_name: Optional[str] = None
+    validated_by_name: Optional[str] = None
+    approved_by_name: Optional[str] = None
+    db_updated_by_name: Optional[str] = None
+    human_id: str = ""
+    viewed_by_name: Optional[str] = None
 
 
 # ── Status Update ────────────────────────────────────────────────────────────
@@ -223,3 +268,14 @@ class DuplicateCheckResponse(BaseModel):
     exact_match_id: Optional[str] = None
     near_matches: List[Dict[str, Any]] = Field(default_factory=list)
     message: str = ""
+
+
+class AuditRecord(BaseModel):
+    id: str
+    submission_id: str
+    action_type: str
+    performed_by_uid: Optional[str] = None
+    performed_by_name: Optional[str] = None
+    performed_by_role: Optional[str] = None
+    timestamp_utc: str
+    metadata: Optional[Dict[str, Any]] = None

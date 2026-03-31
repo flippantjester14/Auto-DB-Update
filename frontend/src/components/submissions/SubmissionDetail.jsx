@@ -6,6 +6,7 @@ import StatusBadge from '../shared/StatusBadge';
 import WaypointViewerTab from '../tabs/WaypointViewerTab';
 import FilesTab from '../tabs/FilesTab';
 import IDResolutionTab from '../tabs/IDResolutionTab';
+import ActivityLogTab from '../tabs/ActivityLogTab';
 import RequiresRole from '../shared/RequiresRole';
 import DiffDisplay from '../submit/DiffDisplay';
 
@@ -13,6 +14,7 @@ const TABS = [
     { name: 'Waypoint Viewer', id: 'waypoints' },
     { name: 'Files', id: 'files' },
     { name: 'ID Resolution', id: 'resolution', locked: true },
+    { name: 'Activity Log', id: 'activity' },
 ];
 
 const FIELD_LABELS = {
@@ -25,6 +27,22 @@ const FIELD_LABELS = {
     mission_drive_link: 'Mission Link', elevation_image_drive_link: 'Elevation Link',
     route_image_drive_link: 'Route Image Link',
 };
+
+const WORKFLOW_LABELS = {
+    'SUBMITTED': 'Submitted',
+    'WAYPOINT_VERIFIED': 'Validated',
+    'ID_RESOLUTION_CONFIRMED': 'IDs Confirmed',
+    'PIPELINE_RUNNING': 'Pipeline Running',
+    'PIPELINE_COMPLETE': 'DB Updated',
+    'PIPELINE_FAILED': 'Failed',
+    'REJECTED': 'Rejected'
+};
+
+function WorkflowBadge({ state }) {
+    const label = WORKFLOW_LABELS[state] || state;
+    const className = `workflow-badge state-${state?.toLowerCase()}`;
+    return <span className={className}>{label}</span>;
+}
 
 export default function SubmissionDetail() {
     const { id } = useParams();
@@ -207,7 +225,7 @@ export default function SubmissionDetail() {
                     <button className="btn btn-ghost" onClick={() => navigate('/')}>
                         <ArrowLeft size={18} />
                     </button>
-                    <h1>Submission #{id.slice(0, 6)}</h1>
+                    <h1>{sub.human_id || `Submission #${id.slice(0, 6)}`}</h1>
                     <span style={{ margin: '0 8px' }}>—</span>
                     <span style={{ fontWeight: 500 }}>{p.source_location_name} → {p.destination_location_name}</span>
                     {p.is_update && (
@@ -219,12 +237,68 @@ export default function SubmissionDetail() {
                             UPDATE
                         </span>
                     )}
-                    <div style={{ marginLeft: '12px' }}>
-                        <StatusBadge status={sub.status} />
+                    <div style={{ marginLeft: '12px', display: 'flex', gap: '16px', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <StatusBadge status={sub.status} />
+                            {sub.status === 'approved' && sub.approved_by_name && (
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>by {sub.approved_by_name}</span>
+                            )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            {sub.workflow_state && <WorkflowBadge state={sub.workflow_state} />}
+                        </div>
                     </div>
                 </div>
-                <div className="detail-subtitle">
-                    {p.mission_filename} · Received {new Date(sub.created_at).toLocaleString()}
+                <div className="detail-subtitle" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                    <span>{p.mission_filename}</span>
+                    <span style={{ opacity: 0.5 }}>•</span>
+                    <span>Received {new Date(sub.created_at).toLocaleString()}</span>
+                </div>
+                
+                {/* Participant Ribbon */}
+                <div style={{ display: 'flex', gap: '24px', margin: '12px 0 24px', padding: '12px 16px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    {sub.submitted_by_name && (
+                        <div>
+                            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: '#64748b', fontWeight: 600 }}>Submitted by</div>
+                            <div style={{ fontSize: '13px', fontWeight: 500 }}>{sub.submitted_by_name}</div>
+                        </div>
+                    )}
+                    {sub.viewed_by_name && (
+                        <div>
+                            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: '#64748b', fontWeight: 600 }}>Viewed by</div>
+                            <div style={{ fontSize: '13px', fontWeight: 500 }}>{sub.viewed_by_name}</div>
+                        </div>
+                    )}
+                    {sub.reviewed_by_name && (
+                        <div>
+                            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: '#64748b', fontWeight: 600 }}>Reviewed by</div>
+                            <div style={{ fontSize: '13px', fontWeight: 500 }}>{sub.reviewed_by_name}</div>
+                        </div>
+                    )}
+                    {sub.verified_by_name && (
+                        <div>
+                            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: '#64748b', fontWeight: 600 }}>Verified by</div>
+                            <div style={{ fontSize: '13px', fontWeight: 500 }}>{sub.verified_by_name}</div>
+                        </div>
+                    )}
+                    {sub.validated_by_name && (
+                        <div>
+                            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: '#64748b', fontWeight: 600 }}>Validated by</div>
+                            <div style={{ fontSize: '13px', fontWeight: 500 }}>{sub.validated_by_name}</div>
+                        </div>
+                    )}
+                    {sub.approved_by_name && (
+                        <div>
+                            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: '#64748b', fontWeight: 600 }}>Approved by</div>
+                            <div style={{ fontSize: '13px', fontWeight: 500 }}>{sub.approved_by_name}</div>
+                        </div>
+                    )}
+                    {sub.db_updated_by_name && (
+                        <div>
+                            <div style={{ fontSize: '10px', textTransform: 'uppercase', color: '#64748b', fontWeight: 600 }}>DB Updated by</div>
+                            <div style={{ fontSize: '13px', fontWeight: 500 }}>{sub.db_updated_by_name}</div>
+                        </div>
+                    )}
                 </div>
 
                 {error && <div className="banner banner-error">⚠ {error}</div>}
@@ -319,6 +393,9 @@ export default function SubmissionDetail() {
                                 loadSubmission(true); // Silent reload to preserve state
                             }}
                         />
+                    )}
+                    {activeTab === 3 && (
+                        <ActivityLogTab submissionId={id} />
                     )}
                 </div>
             </div>
